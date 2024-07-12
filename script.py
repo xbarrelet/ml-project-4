@@ -1,21 +1,27 @@
+import math
 import os
 import shutil
 import sqlite3
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 import seaborn as sns
+import squarify
 from kneed import KneeLocator
 from matplotlib import pyplot as plt
 from pandas.core.frame import DataFrame
 from sklearn.cluster import KMeans, DBSCAN, OPTICS
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
+import dataframe_image as dfi
 
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-#CONFIG
+# CONFIG
 plt.style.use("fivethirtyeight")
+pd.set_option('display.max_rows', None)
+pd.set_option('display.max_columns', None)
 
 
 def remove_last_run_plots():
@@ -26,7 +32,12 @@ def remove_last_run_plots():
 def save_plot(plot, filename: str, prefix: str) -> None:
     os.makedirs(f"plots/{prefix}", exist_ok=True)
 
-    fig = plot.get_figure()
+    # fig = plot.get_figure()
+    if hasattr(plot, 'get_figure'):
+        fig = plot.get_figure()
+    else:
+        fig = plot._figure
+
     fig.savefig(f"plots/{prefix}/{filename}.png")
     plt.close()
 
@@ -70,14 +81,8 @@ def load_data(nb_elements=9999999):
         nb_products = len(customer_orders)
 
         order_timestamps = [order['order_purchase_timestamp'] for order in customer_orders]
-
-        if len(order_timestamps) == 1:
-            order_frequency = 1
-        else:
-            order_earlier_date: datetime = datetime.strptime(min(order_timestamps), DATE_FORMAT)
-            order_latest_date: datetime = datetime.strptime(max(order_timestamps), DATE_FORMAT)
-            diff_days = (order_latest_date - order_earlier_date).days
-            order_frequency = nb_products / diff_days if diff_days != 0 else 1
+        latest_purchase_date: datetime = datetime.strptime(max(order_timestamps), DATE_FORMAT)
+        days_since_last_purchase = (datetime.now() - latest_purchase_date).days
 
         review_scores = [order['review_score'] for order in customer_orders if order['review_score'] is not None]
         if len(review_scores) > 0:
@@ -88,18 +93,18 @@ def load_data(nb_elements=9999999):
         clients.append({
             # 'customer_id': customer['customer_id'],
             'average_review': average_review,
-            'total_amount': total_amount,
-            'nb_products': nb_products,
-            'order_frequency': order_frequency
+            'recency': days_since_last_purchase,
+            'frequency': nb_products,
+            'monetary_value': total_amount
         })
 
     return DataFrame(clients[:nb_elements])
 
 
-def create_clusters_plot(df, x, y):
+def create_clusters_plot(df, x, y, strategy_name):
     plt.figure(figsize=(10, 8))
     plot = sns.scatterplot(x=x, y=y, hue="cluster", data=df)
-    save_plot(plot, f"{x}_vs_{y}_clusters", "kmeans")
+    save_plot(plot, f"{x}_vs_{y}_clusters", strategy_name)
 
 
 def fit_kmeans(scaled_features, max_range, kmeans_kwargs):
@@ -147,7 +152,8 @@ def create_silhouette_score_plot(silhouette_coefficients, max_range):
     save_plot(plot, "silhouette_coefficient", "kmeans")
 
 
-def perform_kmeans_clustering(scaled_features):
+def perform_kmeans_clustering(df, scaled_features):
+    print("Starting KMEANS clustering.\n")
     kmeans_kwargs = {"init": "k-means++", "n_init": 50, "max_iter": 500, "random_state": 42}
     max_range = 11
 
@@ -164,15 +170,143 @@ def perform_kmeans_clustering(scaled_features):
     kmeans.fit(scaled_features)
     df["cluster"] = pd.Categorical(kmeans.labels_)
 
-    create_clusters_plot(df, "total_amount", "nb_products")
-    create_clusters_plot(df, "total_amount", "order_frequency")
-    create_clusters_plot(df, "nb_products", "order_frequency")
-    create_clusters_plot(df, "nb_products", "average_review")
-    create_clusters_plot(df, "total_amount", "average_review")
-    create_clusters_plot(df, "order_frequency", "average_review")
+    create_clusters_plots(df, "kmeans")
+
+
+def create_clusters_plots(df, strategy_name: str):
+    create_clusters_plot(df, "recency", "frequency", strategy_name)
+    create_clusters_plot(df, "recency", "monetary_value", strategy_name)
+    create_clusters_plot(df, "recency", "average_review", strategy_name)
+    create_clusters_plot(df, "frequency", "monetary_value", strategy_name)
+    create_clusters_plot(df, "frequency", "average_review", strategy_name)
+    create_clusters_plot(df, "monetary_value", "average_review", strategy_name)
+
+
+def perform_dbscan_clustering(df, scaled_df, eps, min_samples, metric):
+    print("Starting DBSCAN clustering.\n")
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples, metric=metric)
+    dbscan.fit(scaled_df)
+
+    df["cluster"] = dbscan.labels_
+
+    create_clusters_plots(df, "dbscan")
+
+
+def perform_optics_clustering(df, scaled_df, min_samples, metric):
+    print("Starting OPTICS clustering.\n")
+    optics = OPTICS(min_samples=min_samples, metric=metric)
+    optics.fit(scaled_df)
+
+    # TODO: Use better colors?
+    reachability_plot(df, optics)
+
+    df["cluster"] = optics.labels_
+
+    create_clusters_plots(df, "optics")
+
+
+def reachability_plot(_df, model):
+   reachability = model.reachability_[model.ordering_]
+   labels = model.labels_[model.ordering_]
+   unique_labels = set(labels)
+   space = np.arange(len(_df))
+
+   for k, col in zip(unique_labels, ["#00ADB5", "#FF5376", "#724BE5", "#FDB62F"]):
+       xk = space[labels == k]
+       rk = reachability[labels == k]
+       plt.plot(xk, rk, col)
+       plt.fill_between(xk, rk, color=col, alpha=0.5)
+
+   plt.xticks(space, _df.index[model.ordering_], fontsize=10)
+   plt.plot(space[labels == -1], reachability[labels == -1], "k.", alpha=0.3)
+
+   plt.ylabel("Reachability Distance")
+   plt.title("Reachability Plot")
+   plt.show()
+   plt.close()
+
+def save_rfm_stats(df: DataFrame):
+    RFM_stats = df.groupby("RFM_Level").agg({
+        'recency': 'mean',
+        'frequency': 'mean',
+        'monetary_value': ['mean', 'count']
+    }).round(1)
+    RFM_stats.columns = RFM_stats.columns.droplevel()
+    RFM_stats.columns = ['Recency_Mean', 'Frequency_Mean', 'MonetaryValue_Mean', 'MonetaryValue_Count']
+
+    dfi.export(RFM_stats, 'plots/RFM/RFM_stats.png', table_conversion='matplotlib')
+    return RFM_stats
+
+
+def save_rfm_segments(RFM_stats):
+    fig = plt.gcf()
+    fig.set_size_inches(16, 9)
+
+    plot = squarify.plot(sizes=RFM_stats['MonetaryValue_Count'],
+                         label=['Premiere', 'Champions', 'Loyal', 'Potential', 'Promising', 'Needs attention'],
+                         color=["green", "orange", "purple", "maroon", "pink", "teal"],
+                         alpha=0.6)
+    plot.set_title("RFM Segments")
+
+    plot.get_figure().savefig(f"plots/RFM/RFM_segments.png")
+    plt.close()
+
+
+def visualize_data(df, prefix):
+    create_visualization_plot_for_attribute(df, "Recency", prefix)
+    create_visualization_plot_for_attribute(df, "Frequency", prefix)
+    create_visualization_plot_for_attribute(df, "MonetaryValue", prefix)
+
+
+def create_visualization_plot_for_attribute(df, attribute: str, prefix):
+    plot = sns.displot(df[attribute.replace("MonetaryValue", "Monetary_Value").lower()])
+    plot.set_xlabels(attribute)
+    plot.set_ylabels("Probability")
+    save_plot(plot, attribute, f"visualization_{prefix}")
+
+
+def add_rfm_columns(df):
+    Rlabel = range(4, 0, -1)
+    Mlabel = range(1, 5)
+
+    df['R'] = pd.qcut(df['recency'], q=4, labels=Rlabel).values
+    df['F'] = np.where(df['frequency'] == 1, 1, 2)
+    df['M'] = pd.qcut(df['monetary_value'], q=4, labels=Mlabel).values
+
+    df['RFM_Concat'] = df['R'].astype(str) + df['F'].astype(str) + df['M'].astype(str)
+    df['Score'] = df[['R', 'F', 'M']].sum(axis=1)
+
+    df['RFM_Level'] = df.apply(rfm_level, axis=1)
+
+    return df
+
+
+def rfm_level(df):
+    if df['Score'] >= 9:
+        return "Premiere"
+    elif (df['Score'] >= 7) and (df['Score'] < 9):
+        return 'Champions'
+    elif (df['Score'] >= 6) and (df['Score'] < 7):
+        return 'Loyal'
+    elif (df['Score'] >= 5) and (df['Score'] < 6):
+        return 'Potential'
+    elif (df['Score'] >= 4) and (df['Score'] < 5):
+        return 'Promising'
+    elif (df['Score'] >= 3) and (df['Score'] < 4):
+        return 'Needs attention'
+    else:
+        return 'Requires activation'
+
+
+def visualize_rfm_segments(df):
+    os.makedirs("plots/RFM", exist_ok=True)
+
+    RFM_stats = save_rfm_stats(df)
+    save_rfm_segments(RFM_stats)
 
 
 if __name__ == '__main__':
+    # TODO: Run autopep8 --in-place --aggressive --aggressive to format  the code when ready
     print("Let's start project 4\n")
 
     remove_last_run_plots()
@@ -184,17 +318,21 @@ if __name__ == '__main__':
     # https://realpython.com/k-means-clustering-python/
 
     # df: DataFrame = load_data()
-    df: DataFrame = load_data(nb_elements=1000)
+    df: DataFrame = load_data(nb_elements=10000)
     print("Data loaded\n")
 
-    customers_with_more_than_one_product = df[df['nb_products'] > 1]
-    print(f"Customers with more than one product:{len(customers_with_more_than_one_product)} on {len(df)}, or {len(customers_with_more_than_one_product) * 100 / len(df)}%\n")
+    rfm_df = add_rfm_columns(df.copy())
+    visualize_rfm_segments(rfm_df)
 
-    scaled_df = StandardScaler().fit_transform(df)
+    customers_with_more_than_one_product = df[df['frequency'] > 1]
+    print(f"Customers with more than one product:{len(customers_with_more_than_one_product)} on {len(df)}, "
+          f"or {round(len(customers_with_more_than_one_product) * 100 / len(df), 2)}%\n")
 
-    # perform_kmeans_clustering(scaled_df)
+    visualize_data(df, "pre_scaling")
+    scaled_df = DataFrame(StandardScaler().fit_transform(df), columns=df.columns)
+    visualize_data(scaled_df, "after_scaling")
 
-
+    # perform_kmeans_clustering(df, scaled_df)
 
     # https://www.atlantbh.com/clustering-algorithms-dbscan-vs-optics/
 
@@ -202,15 +340,8 @@ if __name__ == '__main__':
     min_samples = 5
     metric = "euclidean"
 
-    # dbscan = DBSCAN(eps=eps, min_samples=min_samples, metric=metric)
-    # dbscan.fit(scaled_df)
-    # df["cluster"] = dbscan.labels_ / 2
-
-    optics = OPTICS(min_samples=min_samples, metric=metric)
-    optics.fit(df)
-    df["cluster"] = optics.labels_
-
-    create_clusters_plot(df, "total_amount", "nb_products")
+    perform_dbscan_clustering(df, scaled_df, eps, min_samples, metric)
+    perform_optics_clustering(df, scaled_df, min_samples, metric)
 
     # Ultimately, your decision on the number of clusters to use should be guided by a combination of domain knowledge
     # and clustering evaluation metrics.
