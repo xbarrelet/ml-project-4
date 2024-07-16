@@ -168,3 +168,5 @@ resources/
 .idea/
 
 *.db
+
+*BAK*

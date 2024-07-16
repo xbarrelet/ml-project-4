@@ -1,9 +1,9 @@
-import math
 import os
 import shutil
 import sqlite3
 from datetime import datetime
 
+import dataframe_image as dfi
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -11,10 +11,10 @@ import squarify
 from kneed import KneeLocator
 from matplotlib import pyplot as plt
 from pandas.core.frame import DataFrame
-from sklearn.cluster import KMeans, DBSCAN, OPTICS
-from sklearn.metrics import silhouette_score
-from sklearn.preprocessing import StandardScaler
-import dataframe_image as dfi
+from scipy.cluster.hierarchy import linkage, dendrogram
+from sklearn.cluster import KMeans, DBSCAN, OPTICS, AgglomerativeClustering
+from sklearn.metrics import silhouette_score, adjusted_rand_score
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -35,8 +35,10 @@ def save_plot(plot, filename: str, prefix: str) -> None:
     # fig = plot.get_figure()
     if hasattr(plot, 'get_figure'):
         fig = plot.get_figure()
-    else:
+    elif hasattr(plot, '_figure'):
         fig = plot._figure
+    else:
+        fig = plot
 
     fig.savefig(f"plots/{prefix}/{filename}.png")
     plt.close()
@@ -47,7 +49,8 @@ def load_data(nb_elements=9999999):
     con.row_factory = sqlite3.Row
     cur = con.cursor()
 
-    res = cur.execute("SELECT * FROM customers where customer_id in (select customer_id from orders)")
+    res = cur.execute(
+        "SELECT * FROM customers where customer_id in (select customer_id from orders)")
     customers = res.fetchall()
 
     res = cur.execute("select order_id, review_score from order_reviews")
@@ -55,16 +58,21 @@ def load_data(nb_elements=9999999):
 
     sorted_reviews = {}
     for review in reviews:
-        sorted_reviews.setdefault(review['order_id'], []).append(review['review_score'])
+        sorted_reviews.setdefault(
+            review['order_id'],
+            []).append(
+            review['review_score'])
 
-    res = cur.execute("""SELECT o.order_id, o.customer_id, o.order_purchase_timestamp, oi.price
-    FROM orders o 
+    res = cur.execute(
+        """SELECT o.order_id, o.customer_id, o.order_purchase_timestamp, oi.price
+    FROM orders o
     inner join order_items oi on o.order_id = oi.order_id""")
     orders = res.fetchall()
 
     sorted_orders = {}
     for order in [dict(order) for order in orders]:
-        order['review_score'] = sorted_reviews[order['order_id']][0] if order['order_id'] in sorted_reviews else None
+        order['review_score'] = sorted_reviews[order['order_id']
+                                               ][0] if order['order_id'] in sorted_reviews else None
         sorted_orders.setdefault(order['customer_id'], []).append(order)
 
     cur.close()
@@ -73,18 +81,22 @@ def load_data(nb_elements=9999999):
     clients = []
     for customer in customers:
         # for customer in customers:
-        customer_orders = sorted_orders[customer['customer_id']] if customer['customer_id'] in sorted_orders else []
+        customer_orders = sorted_orders[customer['customer_id']
+                                        ] if customer['customer_id'] in sorted_orders else []
         if len(customer_orders) == 0:
             continue
 
         total_amount = sum([order['price'] for order in customer_orders])
         nb_products = len(customer_orders)
 
-        order_timestamps = [order['order_purchase_timestamp'] for order in customer_orders]
-        latest_purchase_date: datetime = datetime.strptime(max(order_timestamps), DATE_FORMAT)
+        order_timestamps = [order['order_purchase_timestamp']
+                            for order in customer_orders]
+        latest_purchase_date: datetime = datetime.strptime(
+            max(order_timestamps), DATE_FORMAT)
         days_since_last_purchase = (datetime.now() - latest_purchase_date).days
 
-        review_scores = [order['review_score'] for order in customer_orders if order['review_score'] is not None]
+        review_scores = [order['review_score']
+                         for order in customer_orders if order['review_score'] is not None]
         if len(review_scores) > 0:
             average_review = sum(review_scores) / len(review_scores)
         else:
@@ -143,7 +155,9 @@ def create_silhouette_score_plot(silhouette_coefficients, max_range):
     # The silhouette coefficient is a measure of cluster cohesion and separation.
     # It quantifies how well a data point fits into its assigned cluster.
     plt.figure(figsize=(10, 9))
-    plot = sns.lineplot(DataFrame(silhouette_coefficients), x=range(2, max_range), y=silhouette_coefficients)
+    plot = sns.lineplot(
+        DataFrame(silhouette_coefficients), x=range(
+            2, max_range), y=silhouette_coefficients)
 
     plot.set_title("Silhouette Coefficient curve")
     plot.set_xlabel("Number of Clusters")
@@ -153,15 +167,29 @@ def create_silhouette_score_plot(silhouette_coefficients, max_range):
 
 
 def perform_kmeans_clustering(df, scaled_features):
+    # https://realpython.com/k-means-clustering-python/
     print("Starting KMEANS clustering.\n")
-    kmeans_kwargs = {"init": "k-means++", "n_init": 50, "max_iter": 500, "random_state": 42}
+
+    kmeans_kwargs = {
+        "init": "k-means++",
+        "n_init": 50,
+        "max_iter": 500,
+        "random_state": 42}
     max_range = 11
 
-    sse, silhouette_coefficients = fit_kmeans(scaled_features, max_range, kmeans_kwargs)
+    sse, silhouette_coefficients = fit_kmeans(
+        scaled_features, max_range, kmeans_kwargs)
 
-    kl = KneeLocator(range(1, max_range), sse, curve="convex", direction="decreasing")
+    kl = KneeLocator(
+        range(
+            1,
+            max_range),
+        sse,
+        curve="convex",
+        direction="decreasing")
     print(f"\nelbow found at iteration:{kl.elbow}")
-    # TODO: The silhouette coefficient should also be taken into account. What other method? One business is needed?
+    # TODO: The silhouette coefficient should also be taken into account. What
+    # other method? One business is needed?
 
     create_sse_plot(sse, max_range)
     create_silhouette_score_plot(silhouette_coefficients, max_range)
@@ -198,7 +226,7 @@ def perform_optics_clustering(df, scaled_df, min_samples, metric):
     optics.fit(scaled_df)
 
     # TODO: Use better colors?
-    reachability_plot(df, optics)
+    # reachability_plot(df, optics)
 
     df["cluster"] = optics.labels_
 
@@ -206,24 +234,27 @@ def perform_optics_clustering(df, scaled_df, min_samples, metric):
 
 
 def reachability_plot(_df, model):
-   reachability = model.reachability_[model.ordering_]
-   labels = model.labels_[model.ordering_]
-   unique_labels = set(labels)
-   space = np.arange(len(_df))
+    reachability = model.reachability_[model.ordering_]
+    labels = model.labels_[model.ordering_]
+    unique_labels = set(labels)
+    space = np.arange(len(_df))
 
-   for k, col in zip(unique_labels, ["#00ADB5", "#FF5376", "#724BE5", "#FDB62F"]):
-       xk = space[labels == k]
-       rk = reachability[labels == k]
-       plt.plot(xk, rk, col)
-       plt.fill_between(xk, rk, color=col, alpha=0.5)
+    for k, col in zip(
+            unique_labels, [
+            "#00ADB5", "#FF5376", "#724BE5", "#FDB62F"]):
+        xk = space[labels == k]
+        rk = reachability[labels == k]
+        plt.plot(xk, rk, col)
+        plt.fill_between(xk, rk, color=col, alpha=0.5)
 
-   plt.xticks(space, _df.index[model.ordering_], fontsize=10)
-   plt.plot(space[labels == -1], reachability[labels == -1], "k.", alpha=0.3)
+    plt.xticks(space, _df.index[model.ordering_], fontsize=10)
+    plt.plot(space[labels == -1], reachability[labels == -1], "k.", alpha=0.3)
 
-   plt.ylabel("Reachability Distance")
-   plt.title("Reachability Plot")
-   plt.show()
-   plt.close()
+    plt.ylabel("Reachability Distance")
+    plt.title("Reachability Plot")
+    plt.show()
+    plt.close()
+
 
 def save_rfm_stats(df: DataFrame):
     RFM_stats = df.groupby("RFM_Level").agg({
@@ -232,9 +263,16 @@ def save_rfm_stats(df: DataFrame):
         'monetary_value': ['mean', 'count']
     }).round(1)
     RFM_stats.columns = RFM_stats.columns.droplevel()
-    RFM_stats.columns = ['Recency_Mean', 'Frequency_Mean', 'MonetaryValue_Mean', 'MonetaryValue_Count']
+    RFM_stats.columns = [
+        'Recency_Mean',
+        'Frequency_Mean',
+        'MonetaryValue_Mean',
+        'MonetaryValue_Count']
 
-    dfi.export(RFM_stats, 'plots/RFM/RFM_stats.png', table_conversion='matplotlib')
+    dfi.export(
+        RFM_stats,
+        'plots/RFM/RFM_stats.png',
+        table_conversion='matplotlib')
     return RFM_stats
 
 
@@ -242,10 +280,23 @@ def save_rfm_segments(RFM_stats):
     fig = plt.gcf()
     fig.set_size_inches(16, 9)
 
-    plot = squarify.plot(sizes=RFM_stats['MonetaryValue_Count'],
-                         label=['Premiere', 'Champions', 'Loyal', 'Potential', 'Promising', 'Needs attention'],
-                         color=["green", "orange", "purple", "maroon", "pink", "teal"],
-                         alpha=0.6)
+    plot = squarify.plot(
+        sizes=RFM_stats['MonetaryValue_Count'],
+        label=[
+            'Premiere',
+            'Champions',
+            'Loyal',
+            'Potential',
+            'Promising',
+            'Needs attention'],
+        color=[
+            "green",
+            "orange",
+            "purple",
+            "maroon",
+            "pink",
+            "teal"],
+        alpha=0.6)
     plot.set_title("RFM Segments")
 
     plot.get_figure().savefig(f"plots/RFM/RFM_segments.png")
@@ -259,7 +310,8 @@ def visualize_data(df, prefix):
 
 
 def create_visualization_plot_for_attribute(df, attribute: str, prefix):
-    plot = sns.displot(df[attribute.replace("MonetaryValue", "Monetary_Value").lower()])
+    plot = sns.displot(df[attribute.replace(
+        "MonetaryValue", "Monetary_Value").lower()])
     plot.set_xlabels(attribute)
     plot.set_ylabels("Probability")
     save_plot(plot, attribute, f"visualization_{prefix}")
@@ -270,12 +322,11 @@ def add_rfm_columns(df):
     Mlabel = range(1, 5)
 
     df['R'] = pd.qcut(df['recency'], q=4, labels=Rlabel).values
-    df['F'] = np.where(df['frequency'] == 1, 1, 2)
     df['M'] = pd.qcut(df['monetary_value'], q=4, labels=Mlabel).values
+    df['F'] = np.where(df['frequency'] == 1, 1, 2)  # TODO: Not great, should I extract the clients with more than 1 purchase in their own cluster instead?
 
     df['RFM_Concat'] = df['R'].astype(str) + df['F'].astype(str) + df['M'].astype(str)
     df['Score'] = df[['R', 'F', 'M']].sum(axis=1)
-
     df['RFM_Level'] = df.apply(rfm_level, axis=1)
 
     return df
@@ -305,45 +356,100 @@ def visualize_rfm_segments(df):
     save_rfm_segments(RFM_stats)
 
 
+def save_dendrogram_plot(scaled_df, method):
+    os.makedirs("plots/hierarchical", exist_ok=True)
+
+    clustering = linkage(scaled_df, method=method, metric="euclidean")
+    dendrogram(clustering)
+    plt.savefig(f"plots/hierarchical/{method}.png")
+
+
+def perform_hierarchical_clustering(df, scaled_df):
+    # https://www.datacamp.com/tutorial/introduction-hierarchical-clustering-python
+    print("Starting hierarchical clustering.\n")
+
+    save_dendrogram_plot(scaled_df, "complete")
+    save_dendrogram_plot(scaled_df, "average")
+    save_dendrogram_plot(scaled_df, "single")
+
+    hierarchical_cluster = AgglomerativeClustering(n_clusters=6, metric='euclidean', linkage='ward')
+    labels = hierarchical_cluster.fit_predict(scaled_df)
+
+    df["cluster"] = labels
+    create_clusters_plots(df, "hierarchical")
+
+
+def perform_density_based_clustering(df, scaled_df, true_labels):
+    # https://www.atlantbh.com/clustering-algorithms-dbscan-vs-optics/
+    print("Starting DBSCAN and OPTICS clustering.\n")
+
+    max_ari_results = 0
+    best_parameters = {}
+    for min_samples in range(5, 25, 5):
+        for eps in np.arange(0.01, 1, 0.01):
+            dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+            dbscan.fit(scaled_df)
+            ari_dbscan = round(adjusted_rand_score(true_labels, dbscan.labels_), 4)
+            print("Adjusted rand score is", ari_dbscan, "when min sample is", min_samples, "and epsilon is", round(eps, 3))
+
+            if ari_dbscan > max_ari_results:
+                max_ari_results = ari_dbscan
+                best_parameters = {"min_samples": min_samples, "eps": eps}
+    print("Best parameters for DBSCAN are", best_parameters, "with ARI", max_ari_results)
+    # Best parameters for DBSCAN are {'min_samples': 20, 'eps': np.float64(0.1)} with ARI 0.0195
+    # Best parameters for DBSCAN are {'min_samples': 5, 'eps': np.float64(0.03)} with ARI 0.05
+
+    max_ari_results = 0
+    best_parameters = {}
+    for min_samples in range(5, 25, 5):
+        optics = OPTICS(min_samples=min_samples)
+        optics.fit(scaled_df)
+        ari_dbscan = round(adjusted_rand_score(true_labels, optics.labels_), 4)
+        print("Adjusted rand score is", ari_dbscan, "when min sample is", min_samples)
+
+        if ari_dbscan > max_ari_results:
+            max_ari_results = ari_dbscan
+            best_parameters = {"min_samples": min_samples, "eps": eps}
+    print("Best parameters for OPTICS are", best_parameters, "with ARI", max_ari_results)
+    # Best parameters for OPTICS are {'min_samples': 5} with ARI 0.0205
+    # Best parameters for OPTICS are {'min_samples': 5} with ARI 0.0215
+
+    # perform_dbscan_clustering(df, scaled_df, eps, min_samples, metric)
+    # perform_optics_clustering(df, scaled_df, min_samples, metric)
+
+
 if __name__ == '__main__':
-    # TODO: Run autopep8 --in-place --aggressive --aggressive to format  the code when ready
-    print("Let's start project 4\n")
+    print("Let's start project 4.\n")
 
     remove_last_run_plots()
 
-    # Il te faut du quantitatif la. Dans ton analyse montre que seulement un petit % des clients a plus d'1 commande.
     # Ideally you should extract the clients with more than 1 purchase in their own cluster and
     # then add it to the ML results but here they don't want that.
 
-    # https://realpython.com/k-means-clustering-python/
-
     # df: DataFrame = load_data()
-    df: DataFrame = load_data(nb_elements=10000)
-    print("Data loaded\n")
+    df: DataFrame = load_data(nb_elements=50000)
+    print("Data loaded.\n")
 
     rfm_df = add_rfm_columns(df.copy())
     visualize_rfm_segments(rfm_df)
+    print("FRM segmentation finished.\n")
+
+    label_encoder = LabelEncoder()
+    true_labels = label_encoder.fit_transform(rfm_df['RFM_Level'])
 
     customers_with_more_than_one_product = df[df['frequency'] > 1]
-    print(f"Customers with more than one product:{len(customers_with_more_than_one_product)} on {len(df)}, "
+    print(f"Customers with more than one product:{len(customers_with_more_than_one_product)} on {len(df)}, " 
           f"or {round(len(customers_with_more_than_one_product) * 100 / len(df), 2)}%\n")
 
     visualize_data(df, "pre_scaling")
     scaled_df = DataFrame(StandardScaler().fit_transform(df), columns=df.columns)
     visualize_data(scaled_df, "after_scaling")
 
-    # perform_kmeans_clustering(df, scaled_df)
+    perform_kmeans_clustering(df, scaled_df)
 
-    # https://www.atlantbh.com/clustering-algorithms-dbscan-vs-optics/
+    perform_density_based_clustering(df, scaled_df, true_labels)
 
-    eps = 0.5
-    min_samples = 5
-    metric = "euclidean"
-
-    perform_dbscan_clustering(df, scaled_df, eps, min_samples, metric)
-    perform_optics_clustering(df, scaled_df, min_samples, metric)
+    perform_hierarchical_clustering(df, scaled_df)
 
     # Ultimately, your decision on the number of clusters to use should be guided by a combination of domain knowledge
     # and clustering evaluation metrics.
-
-    # Essaie le hierarchical clustering et le DABthingy.
