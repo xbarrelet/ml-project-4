@@ -1,4 +1,7 @@
 #!/bin/bash
 
-cp script.py script_BAK.py &&
-autopep8 --in-place --aggressive --aggressive script.py
+for file in $(ls *.py | grep -v BAK); do
+  echo "Formatting $file"
+  cp $file $file_BAK &&
+  autopep8 --in-place --aggressive --aggressive $file
+done

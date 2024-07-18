@@ -45,7 +45,7 @@ def load_data():
     con.row_factory = sqlite3.Row
     cur = con.cursor()
 
-    res = cur.execute("SELECT * FROM customers where customer_id in (select customer_id from orders)")
+    res = cur.execute("SELECT customer_id FROM customers where customer_id in (select customer_id from orders)")
     customers = res.fetchall()
 
     res = cur.execute("select order_id, review_score from order_reviews")
@@ -69,8 +69,7 @@ def load_data():
 
     sorted_orders = {}
     for order in [dict(order) for order in orders]:
-        order['review_score'] = sorted_reviews[order['order_id']
-        ][0] if order['order_id'] in sorted_reviews else None
+        order['review_score'] = sorted_reviews[order['order_id']][0] if order['order_id'] in sorted_reviews else None
         sorted_orders.setdefault(order['customer_id'], []).append(order)
 
     clients = []
@@ -81,11 +80,10 @@ def load_data():
 
         total_amount = sum([order['price'] for order in customer_orders])
         nb_products = len(customer_orders)
+        # nb_products = len(set([order['order_id'] for order in customer_orders]))
 
-        order_timestamps = [order['order_purchase_timestamp']
-                            for order in customer_orders]
-        latest_purchase_date: datetime = datetime.strptime(
-            max(order_timestamps), DATE_FORMAT)
+        order_timestamps = [order['order_purchase_timestamp'] for order in customer_orders]
+        latest_purchase_date: datetime = datetime.strptime(max(order_timestamps), DATE_FORMAT)
         days_since_last_purchase = (datetime.now() - latest_purchase_date).days
 
         review_scores = [order['review_score']
@@ -242,6 +240,10 @@ if __name__ == '__main__':
     df: DataFrame = load_data()
     print("Data loaded.\n")
 
+    customers_with_more_than_one_product = df[df['frequency'] > 1]
+    print(f"Customers with more than one product:{len(customers_with_more_than_one_product)} on {len(df)}, "
+          f"or {round(len(customers_with_more_than_one_product) * 100 / len(df), 2)}%\n")
+
     df = add_rfm_columns(df)
     visualize_rfm_segments(df)
     print("RFM segmentation finished.\n")
@@ -251,3 +253,5 @@ if __name__ == '__main__':
     df.drop(columns=["RFM_Level"], axis=1, inplace=True)
     scaled_df = DataFrame(StandardScaler().fit_transform(df), columns=df.columns)
     visualize_data(scaled_df, "after_scaling")
+
+    print("Visualization done.")
