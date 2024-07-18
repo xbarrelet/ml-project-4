@@ -81,8 +81,7 @@ def load_data(nb_elements=9999999):
     clients = []
     for customer in customers:
         # for customer in customers:
-        customer_orders = sorted_orders[customer['customer_id']
-                                        ] if customer['customer_id'] in sorted_orders else []
+        customer_orders = sorted_orders[customer['customer_id']] if customer['customer_id'] in sorted_orders else []
         if len(customer_orders) == 0:
             continue
 
@@ -180,16 +179,11 @@ def perform_kmeans_clustering(df, scaled_features):
     sse, silhouette_coefficients = fit_kmeans(
         scaled_features, max_range, kmeans_kwargs)
 
-    kl = KneeLocator(
-        range(
-            1,
-            max_range),
-        sse,
-        curve="convex",
-        direction="decreasing")
+    # Good answer entre 3 et 5, donc on se base la-dessus
+    kl = KneeLocator(range(1, max_range), sse, curve="convex", direction="decreasing")
     print(f"\nelbow found at iteration:{kl.elbow}")
-    # TODO: The silhouette coefficient should also be taken into account. What
-    # other method? One business is needed?
+    # TODO: The silhouette coefficient should also be taken into account but produces a 7. Here we're looking for 3-5.
+    # So produce the clustering for both and evaluate which is the best manually.
 
     create_sse_plot(sse, max_range)
     create_silhouette_score_plot(silhouette_coefficients, max_range)
@@ -202,6 +196,9 @@ def perform_kmeans_clustering(df, scaled_features):
 
 
 def create_clusters_plots(df, strategy_name: str):
+    # Use a PCA, this current solution is not clear. 1 color per label.
+    # With the same PCA you can change the colors, for example once with the labels
+    # and once with the average price to try to correlate input values and result.
     create_clusters_plot(df, "recency", "frequency", strategy_name)
     create_clusters_plot(df, "recency", "monetary_value", strategy_name)
     create_clusters_plot(df, "recency", "average_review", strategy_name)
@@ -323,7 +320,7 @@ def add_rfm_columns(df):
 
     df['R'] = pd.qcut(df['recency'], q=4, labels=Rlabel).values
     df['M'] = pd.qcut(df['monetary_value'], q=4, labels=Mlabel).values
-    df['F'] = np.where(df['frequency'] == 1, 1, 2)  # TODO: Not great, should I extract the clients with more than 1 purchase in their own cluster instead?
+    df['F'] = np.where(df['frequency'] == 1, 1, 2)  # Good enough
 
     df['RFM_Concat'] = df['R'].astype(str) + df['F'].astype(str) + df['M'].astype(str)
     df['Score'] = df[['R', 'F', 'M']].sum(axis=1)
@@ -368,10 +365,13 @@ def perform_hierarchical_clustering(df, scaled_df):
     # https://www.datacamp.com/tutorial/introduction-hierarchical-clustering-python
     print("Starting hierarchical clustering.\n")
 
+    # TODO: Il manque la partie de gauche sur les dendogram.
+
     save_dendrogram_plot(scaled_df, "complete")
     save_dendrogram_plot(scaled_df, "average")
-    save_dendrogram_plot(scaled_df, "single")
+    save_dendrogram_plot(scaled_df, "single")  # This one crashes.
 
+    # 6 is ok, Kmeans is the one you should interprate most this one is mostly for show.
     hierarchical_cluster = AgglomerativeClustering(n_clusters=6, metric='euclidean', linkage='ward')
     labels = hierarchical_cluster.fit_predict(scaled_df)
 
@@ -385,7 +385,7 @@ def perform_density_based_clustering(df, scaled_df, true_labels):
 
     max_ari_results = 0
     best_parameters = {}
-    for min_samples in range(5, 25, 5):
+    for min_samples in range(5, 25, 5):  # TODO: on veut du 100
         for eps in np.arange(0.01, 1, 0.01):
             dbscan = DBSCAN(eps=eps, min_samples=min_samples)
             dbscan.fit(scaled_df)
@@ -396,8 +396,9 @@ def perform_density_based_clustering(df, scaled_df, true_labels):
                 max_ari_results = ari_dbscan
                 best_parameters = {"min_samples": min_samples, "eps": eps}
     print("Best parameters for DBSCAN are", best_parameters, "with ARI", max_ari_results)
-    # Best parameters for DBSCAN are {'min_samples': 20, 'eps': np.float64(0.1)} with ARI 0.0195
-    # Best parameters for DBSCAN are {'min_samples': 5, 'eps': np.float64(0.03)} with ARI 0.05
+    # Best parameters for DBSCAN are {'min_samples': 20, 'eps': np.float64(0.1)} with ARI 0.0195 10k et diff params
+    # Best parameters for DBSCAN are {'min_samples': 5, 'eps': np.float64(0.03)} with ARI 0.05 10k
+    # Best parameters for DBSCAN are {'min_samples': 15, 'eps': np.float64(0.03)} with ARI 0.0263 50k
 
     max_ari_results = 0
     best_parameters = {}
@@ -409,13 +410,17 @@ def perform_density_based_clustering(df, scaled_df, true_labels):
 
         if ari_dbscan > max_ari_results:
             max_ari_results = ari_dbscan
-            best_parameters = {"min_samples": min_samples, "eps": eps}
+            best_parameters = {"min_samples": min_samples}
     print("Best parameters for OPTICS are", best_parameters, "with ARI", max_ari_results)
-    # Best parameters for OPTICS are {'min_samples': 5} with ARI 0.0205
-    # Best parameters for OPTICS are {'min_samples': 5} with ARI 0.0215
+    # Best parameters for OPTICS are {'min_samples': 5} with ARI 0.0205 10k?
+    # Best parameters for OPTICS are {'min_samples': 5} with ARI 0.0215 10k
+    # Best parameters for OPTICS are {'min_samples': 15} with ARI 0.0022 50k
 
     # perform_dbscan_clustering(df, scaled_df, eps, min_samples, metric)
     # perform_optics_clustering(df, scaled_df, min_samples, metric)
+
+    # TODO: Regarde combien de clusters I get, if I get tons like 100 it's not actionable.
+    #  Take the same PCA, visualize the clusters and demonstrate that it doesn't make sense.
 
 
 if __name__ == '__main__':
@@ -432,8 +437,9 @@ if __name__ == '__main__':
 
     rfm_df = add_rfm_columns(df.copy())
     visualize_rfm_segments(rfm_df)
-    print("FRM segmentation finished.\n")
+    print("RFM segmentation finished.\n")
 
+    # With ML we don't aim towards these business rules
     label_encoder = LabelEncoder()
     true_labels = label_encoder.fit_transform(rfm_df['RFM_Level'])
 
