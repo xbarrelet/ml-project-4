@@ -118,9 +118,8 @@ def fit_kmeans(scaled_features, kmeans_kwargs):
     sse = []
     silhouette_coefficients = []
 
-    for k in range(1, MAX_CLUSTERS_NUMBER + 1):
-        print(
-            f"KMeans clustering with {k} cluster{'s' if k > 1 else ''} started at {datetime.now().strftime("%H:%M:%S")}")
+    for k in range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1):
+        print(f"KMeans clustering with {k} cluster{'s' if k > 1 else ''} started at {datetime.now().strftime("%H:%M:%S")}")
         kmeans = KMeans(n_clusters=k, **kmeans_kwargs)
         kmeans.fit(scaled_features)
 
@@ -176,7 +175,7 @@ def perform_kmeans_clustering(scaled_df):
 
     # Using the best clusters number from the Elbow found using the Knee locator
     kl = KneeLocator(range(1, MAX_CLUSTERS_NUMBER + 1), sse, curve="convex", direction="decreasing")
-    print(f"Elbow found at iteration:{kl.elbow}.\n")
+    print(f"\nElbow found at iteration:{kl.elbow}.\n")
 
     return kl.elbow
 
@@ -220,25 +219,23 @@ def save_dendrogram_plot(scaled_df, method):
     os.makedirs("plots/hierarchical", exist_ok=True)
 
     clustering = linkage(scaled_df, method=method, metric="euclidean")
-    dendrogram(clustering)
+    dendrogram(clustering, truncate_mode="level", p=5)
     plt.savefig(f"plots/hierarchical/{method}.png")
 
 
-def perform_hierarchical_clustering(df, scaled_df):
-    # https://www.datacamp.com/tutorial/introduction-hierarchical-clustering-python
-    print("Starting hierarchical clustering.\n")
+def perform_hierarchical_clustering(scaled_df):
+    print("\nStarting hierarchical clustering.\n")
 
-    # TODO: Il manque la partie de gauche sur les dendogram.
+    for clusters_number in range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1):
+        hierarchical_cluster = AgglomerativeClustering(n_clusters=clusters_number, metric='euclidean', linkage='ward')
+        labels = hierarchical_cluster.fit_predict(scaled_df)
 
-    save_dendrogram_plot(scaled_df, "complete")
-    save_dendrogram_plot(scaled_df, "average")
-    save_dendrogram_plot(scaled_df, "single")  # This one crashes.
+        visualize_clusters(scaled_df, labels, f"hierarchical")
 
-    # 6 is ok, Kmeans is the one you should interprate most this one is mostly for show.
-    hierarchical_cluster = AgglomerativeClustering(n_clusters=6, metric='euclidean', linkage='ward')
-    labels = hierarchical_cluster.fit_predict(scaled_df)
-
-    df["cluster"] = labels
+    # TODO: The dendrogram should be adapted to your current model, not generic like here as it's meaningless
+    plt.figure(figsize=(15, 15))
+    dendrogram(linkage(scaled_df, method="ward", metric="euclidean"), truncate_mode="level", p=6)
+    plt.savefig(f"plots/hierarchical/dendrogram.png")
 
 
 def perform_density_based_clustering(scaled_df):
@@ -247,7 +244,7 @@ def perform_density_based_clustering(scaled_df):
 
 
 def perform_optics_clustering(scaled_df):
-    print("Starting OPTICS clustering.\n")
+    print("\nStarting OPTICS clustering.\n")
 
     for min_samples in range(25, 150, 5):
         optics = OPTICS(min_samples=min_samples)
@@ -259,6 +256,8 @@ def perform_optics_clustering(scaled_df):
 
         if MIN_CLUSTERS_NUMBER <= clusters_number <= MAX_CLUSTERS_NUMBER:
             visualize_clusters(scaled_df, labels, f"optics_min_samples_{min_samples}")
+
+        # TODO: Show reachability_plot?
 
 
 def perform_dbscan_clustering(scaled_df):
@@ -279,6 +278,7 @@ def perform_dbscan_clustering(scaled_df):
 def visualize_clusters(scaled_df, labels, strategy_name):
     labels = pd.Categorical(labels)
 
+    # TODO: Can I save this pca_df somewhere? How slow is the calculation anyway?
     pca = PCA()
     pca_results = pca.fit_transform(scaled_df)
     pca_df = DataFrame(pca_results[:, :2], columns=['x', 'y'])
@@ -292,14 +292,14 @@ def visualize_clusters(scaled_df, labels, strategy_name):
     plot.set_ylabel(f'F2 ({round(100 * pca.explained_variance_ratio_[1], 1)}%)')
     plot.grid(True)
 
-    save_plot(plot, f"cluster_{strategy_name}_with_{len(labels.unique())}_clusters", "clusters")
+    save_plot(plot, f"{strategy_name}_{len(labels.unique())}_clusters", f"{strategy_name.split("_")[0]}")
 
 
 def verify_form_and_stability_of_best_strategy(scaled_df, best_kmeans_number_of_clusters):
     print("Starting verification of form and stability of the best strategy.\n")
 
     for iteration in range(1, 11):
-        kmeans = KMeans(n_clusters=best_kmeans_number_of_clusters, random_state=4242)
+        kmeans = KMeans(n_clusters=best_kmeans_number_of_clusters)
         kmeans.fit(scaled_df)
         labels = kmeans.labels_
 
@@ -317,10 +317,14 @@ if __name__ == '__main__':
 
     scaled_df = DataFrame(StandardScaler().fit_transform(df), columns=df.columns)
 
-    # best_kmeans_number_of_clusters = perform_kmeans_clustering(scaled_df)
+    best_kmeans_number_of_clusters = perform_kmeans_clustering(scaled_df)
 
-    # perform_density_based_clustering(scaled_df)
+    perform_density_based_clustering(scaled_df)
 
-    perform_hierarchical_clustering(df, scaled_df)
+    perform_hierarchical_clustering(scaled_df)
 
-    # verify_form_and_stability_of_best_strategy(scaled_df, best_kmeans_number_of_clusters)
+    verify_form_and_stability_of_best_strategy(scaled_df, best_kmeans_number_of_clusters)
+
+    print("All processing is now done.")
+
+    # TODO: ADD documentation like docstrings for each function
