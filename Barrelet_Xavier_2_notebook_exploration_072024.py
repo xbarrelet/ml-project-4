@@ -82,8 +82,9 @@ def load_data():
         nb_products = len(customer_orders)
         # nb_products = len(set([order['order_id'] for order in customer_orders]))
 
-        order_timestamps = [order['order_purchase_timestamp'] for order in customer_orders]
-        latest_purchase_date: datetime = datetime.strptime(max(order_timestamps), DATE_FORMAT)
+        order_timestamps = [datetime.strptime(order['order_purchase_timestamp'], DATE_FORMAT)
+                            for order in customer_orders]
+        latest_purchase_date: datetime = max(order_timestamps)
         days_since_last_purchase = (datetime.now() - latest_purchase_date).days
 
         review_scores = [order['review_score']

@@ -13,7 +13,7 @@ from pandas.core.frame import DataFrame
 from scipy.cluster.hierarchy import linkage, dendrogram
 from sklearn.cluster import KMeans, DBSCAN, OPTICS, AgglomerativeClustering
 from sklearn.decomposition import PCA
-from sklearn.metrics import silhouette_score, adjusted_rand_score
+from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -23,9 +23,7 @@ plt.style.use("fivethirtyeight")
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
-SILHOUETTE_BEST_CLUSTERS_NUMBER = 7
-
-MIN_CLUSTERS_NUMBER = 3
+MIN_CLUSTERS_NUMBER = 2
 MAX_CLUSTERS_NUMBER = 10
 
 
@@ -54,7 +52,7 @@ def load_data(nb_elements=9999999):
     con.row_factory = sqlite3.Row
     cur = con.cursor()
 
-    res = cur.execute("SELECT * FROM customers where customer_id in (select customer_id from orders)")
+    res = cur.execute("SELECT customer_id FROM customers where customer_id in (select customer_id from orders)")
     customers = res.fetchall()
 
     res = cur.execute("select order_id, review_score from order_reviews")
@@ -86,8 +84,9 @@ def load_data(nb_elements=9999999):
         total_amount = sum([order['price'] for order in customer_orders])
         nb_products = len(customer_orders)
 
-        order_timestamps = [order['order_purchase_timestamp'] for order in customer_orders]
-        latest_purchase_date: datetime = datetime.strptime(max(order_timestamps), DATE_FORMAT)
+        order_timestamps = [datetime.strptime(order['order_purchase_timestamp'], DATE_FORMAT)
+                            for order in customer_orders]
+        latest_purchase_date: datetime = max(order_timestamps)
         days_since_last_purchase = (datetime.now() - latest_purchase_date).days
 
         review_scores = [order['review_score'] for order in customer_orders if order['review_score'] is not None]
@@ -96,6 +95,7 @@ def load_data(nb_elements=9999999):
         else:
             average_review = 0
 
+        # 36 customers are excluded and that eliminates some outliers in the PCA graphs and makes them more readable
         if nb_products < 8:
             clients.append({
                 # 'customer_id': customer['customer_id'],
@@ -108,18 +108,13 @@ def load_data(nb_elements=9999999):
     return DataFrame(clients[:nb_elements])
 
 
-def create_clusters_plot(df, x, y, strategy_name):
-    plt.figure(figsize=(10, 8))
-    plot = sns.scatterplot(x=x, y=y, hue="cluster", data=df)
-    save_plot(plot, f"{x}_vs_{y}_clusters", strategy_name)
-
-
 def fit_kmeans(scaled_features, kmeans_kwargs):
     sse = []
     silhouette_coefficients = []
 
     for k in range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1):
-        print(f"KMeans clustering with {k} cluster{'s' if k > 1 else ''} started at {datetime.now().strftime("%H:%M:%S")}")
+        print(
+            f"KMeans clustering with {k} cluster{'s' if k > 1 else ''} started at {datetime.now().strftime("%H:%M:%S")}")
         kmeans = KMeans(n_clusters=k, **kmeans_kwargs)
         kmeans.fit(scaled_features)
 
@@ -134,9 +129,9 @@ def fit_kmeans(scaled_features, kmeans_kwargs):
     return sse, silhouette_coefficients
 
 
-def create_sse_plot(sse, max_range):
+def create_sse_plot(sse):
     plt.figure(figsize=(10, 9))
-    plot = sns.lineplot(DataFrame(sse), x=range(1, max_range), y=sse)
+    plot = sns.lineplot(DataFrame(sse), x=range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1), y=sse)
 
     plot.set_title("SSE curve")
     plot.set_xlabel("Number of Clusters")
@@ -145,13 +140,12 @@ def create_sse_plot(sse, max_range):
     save_plot(plot, "elbow", "kmeans")
 
 
-def create_silhouette_score_plot(silhouette_coefficients, max_range):
+def create_silhouette_score_plot(silhouette_coefficients):
     # The silhouette coefficient is a measure of cluster cohesion and separation.
     # It quantifies how well a data point fits into its assigned cluster.
     plt.figure(figsize=(10, 9))
-    plot = sns.lineplot(
-        DataFrame(silhouette_coefficients), x=range(
-            2, max_range), y=silhouette_coefficients)
+    plot = sns.lineplot(DataFrame(silhouette_coefficients), x=range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1),
+                        y=silhouette_coefficients)
 
     plot.set_title("Silhouette Coefficient curve")
     plot.set_xlabel("Number of Clusters")
@@ -170,57 +164,13 @@ def perform_kmeans_clustering(scaled_df):
         "random_state": 42}
 
     sse, silhouette_coefficients = fit_kmeans(scaled_df, kmeans_kwargs)
-    create_sse_plot(sse, MAX_CLUSTERS_NUMBER + 1)
-    create_silhouette_score_plot(silhouette_coefficients, MAX_CLUSTERS_NUMBER + 1)
+    create_sse_plot(sse)
+    create_silhouette_score_plot(silhouette_coefficients)
 
-    # Using the best clusters number from the Elbow found using the Knee locator
-    kl = KneeLocator(range(1, MAX_CLUSTERS_NUMBER + 1), sse, curve="convex", direction="decreasing")
+    kl = KneeLocator(range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1), sse, curve="convex", direction="decreasing")
     print(f"\nElbow found at iteration:{kl.elbow}.\n")
 
     return kl.elbow
-
-    # kmeans = KMeans(n_clusters=kl.elbow, **kmeans_kwargs)
-    # kmeans.fit(scaled_df)
-    #
-    # visualize_clusters(scaled_df, kmeans.labels_, "kmeans")
-    #
-    # # Using the best clusters number from the Silhouette coefficients
-    # print(f"Using number of clusters:{SILHOUETTE_BEST_CLUSTERS_NUMBER} determined from the Silhouette coefficients.\n")
-    # silhouette_kmeans = KMeans(n_clusters=SILHOUETTE_BEST_CLUSTERS_NUMBER, **kmeans_kwargs)
-    # silhouette_kmeans.fit(scaled_df)
-    #
-    # visualize_clusters(scaled_df, silhouette_kmeans.labels_, "kmeans")
-
-
-def reachability_plot(_df, model):
-    reachability = model.reachability_[model.ordering_]
-    labels = model.labels_[model.ordering_]
-    unique_labels = set(labels)
-    space = np.arange(len(_df))
-
-    for k, col in zip(
-            unique_labels, [
-                "#00ADB5", "#FF5376", "#724BE5", "#FDB62F"]):
-        xk = space[labels == k]
-        rk = reachability[labels == k]
-        plt.plot(xk, rk, col)
-        plt.fill_between(xk, rk, color=col, alpha=0.5)
-
-    plt.xticks(space, _df.index[model.ordering_], fontsize=10)
-    plt.plot(space[labels == -1], reachability[labels == -1], "k.", alpha=0.3)
-
-    plt.ylabel("Reachability Distance")
-    plt.title("Reachability Plot")
-    plt.show()
-    plt.close()
-
-
-def save_dendrogram_plot(scaled_df, method):
-    os.makedirs("plots/hierarchical", exist_ok=True)
-
-    clustering = linkage(scaled_df, method=method, metric="euclidean")
-    dendrogram(clustering, truncate_mode="level", p=5)
-    plt.savefig(f"plots/hierarchical/{method}.png")
 
 
 def perform_hierarchical_clustering(scaled_df):
@@ -257,8 +207,6 @@ def perform_optics_clustering(scaled_df):
         if MIN_CLUSTERS_NUMBER <= clusters_number <= MAX_CLUSTERS_NUMBER:
             visualize_clusters(scaled_df, labels, f"optics_min_samples_{min_samples}")
 
-        # TODO: Show reachability_plot?
-
 
 def perform_dbscan_clustering(scaled_df):
     print("Starting DBSCAN clustering.\n")
@@ -292,7 +240,8 @@ def visualize_clusters(scaled_df, labels, strategy_name):
     plot.set_ylabel(f'F2 ({round(100 * pca.explained_variance_ratio_[1], 1)}%)')
     plot.grid(True)
 
-    save_plot(plot, f"{strategy_name}_{len(labels.unique())}_clusters", f"{strategy_name.split("_")[0]}")
+    save_plot(plot, f"{strategy_name.replace("_", " ")}_{len(labels.unique())}_clusters",
+              f"{strategy_name.split("_")[0]}")
 
 
 def verify_form_and_stability_of_best_strategy(scaled_df, best_kmeans_number_of_clusters):
@@ -312,7 +261,7 @@ if __name__ == '__main__':
     remove_last_run_plots()
 
     # df: DataFrame = load_data()
-    df: DataFrame = load_data(nb_elements=10000)
+    df: DataFrame = load_data(nb_elements=100000)
     print("Data loaded.\n")
 
     scaled_df = DataFrame(StandardScaler().fit_transform(df), columns=df.columns)
