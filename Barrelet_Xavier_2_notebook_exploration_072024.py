@@ -2,6 +2,7 @@ import os
 import shutil
 import sqlite3
 from datetime import datetime
+from pprint import pprint
 
 import dataframe_image as dfi
 import numpy as np
@@ -47,7 +48,7 @@ def load_data():
     con.row_factory = sqlite3.Row
     cur = con.cursor()
 
-    res = cur.execute("""SELECT customer_id, customer_unique_id FROM customers 
+    res = cur.execute("""SELECT customer_id, customer_unique_id FROM customers
     where customer_id in (select customer_id from orders)""")
     customers = res.fetchall()
 
@@ -65,16 +66,22 @@ def load_data():
 
     sorted_reviews = {}
     for review in reviews:
-        sorted_reviews.setdefault(review['order_id'], []).append(review['review_score'])
+        sorted_reviews.setdefault(
+            review['order_id'],
+            []).append(
+            review['review_score'])
 
     sorted_orders = {}
     for order in [dict(order) for order in orders]:
-        order['review_score'] = sorted_reviews[order['order_id']][0] if order['order_id'] in sorted_reviews else None
+        order['review_score'] = sorted_reviews[order['order_id']
+                                               ][0] if order['order_id'] in sorted_reviews else None
         sorted_orders.setdefault(order['customer_id'], []).append(order)
 
     sorted_customers = {}
     for customer in [dict(customer) for customer in customers]:
-        sorted_customers.setdefault(customer['customer_unique_id'], []).append(customer['customer_id'])
+        sorted_customers.setdefault(
+            customer['customer_unique_id'], []).append(
+            customer['customer_id'])
 
     clients = []
     for customer_unique_id in sorted_customers.keys():
@@ -90,8 +97,10 @@ def load_data():
         total_amount = sum([order['price'] for order in customer_orders])
         nb_products = len(customer_orders)
 
-        order_timestamps = [datetime.strptime(order['order_purchase_timestamp'], DATE_FORMAT)
-                            for order in customer_orders]
+        order_timestamps = [
+            datetime.strptime(
+                order['order_purchase_timestamp'],
+                DATE_FORMAT) for order in customer_orders]
         latest_purchase_date: datetime = max(order_timestamps)
         days_since_last_purchase = (datetime.now() - latest_purchase_date).days
 
@@ -134,6 +143,8 @@ def save_rfm_stats(df: DataFrame):
         'analysis_plots/RFM/RFM_stats.png',
         table_conversion='matplotlib',
         fontsize=9)
+
+    pprint(RFM_stats)
     return RFM_stats
 
 
@@ -182,7 +193,8 @@ def create_pieplot_for_RFM_segments(df, prefix):
     colors = sns.color_palette('pastel')[0:6]
     plt.pie(data, labels=labels, colors=colors, autopct='%.0f%%')
     plt.title('RFM segments distribution')
-    plt.savefig(f"analysis_plots/visualization_{prefix}/RFM_segments_pieplot.png")
+    plt.savefig(
+        f"analysis_plots/visualization_{prefix}/RFM_segments_pieplot.png")
     plt.close()
 
 
@@ -209,7 +221,10 @@ def create_visualization_plot_for_attribute(df, attribute: str, prefix):
         plot.set_xlabels(attribute.replace("average_review", "Average Review"))
         plot.set_ylabels("Count")
 
-        display_plot(plot, f"{column_name}_distplot", f"visualization_{prefix}")
+        display_plot(
+            plot,
+            f"{column_name}_distplot",
+            f"visualization_{prefix}")
 
 
 def add_rfm_columns(df):
@@ -265,7 +280,9 @@ if __name__ == '__main__':
 
     df.drop(columns=["RFM_Level"], axis=1, inplace=True)
 
-    scaled_df = DataFrame(StandardScaler().fit_transform(df), columns=df.columns)
+    scaled_df = DataFrame(
+        StandardScaler().fit_transform(df),
+        columns=df.columns)
     visualize_data(scaled_df, "after_scaling")
 
     print("Visualization done.")

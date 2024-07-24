@@ -40,11 +40,12 @@ def load_data(nb_elements=9999999):
     con.row_factory = sqlite3.Row
     cur = con.cursor()
 
-    res = cur.execute("""SELECT customer_id, customer_unique_id FROM customers 
+    res = cur.execute("""SELECT customer_id, customer_unique_id FROM customers
     where customer_id in (select customer_id from orders)""")
     customers = res.fetchall()
 
-    res = cur.execute("""SELECT o.order_id, o.customer_id, o.order_purchase_timestamp, oi.price
+    res = cur.execute(
+        """SELECT o.order_id, o.customer_id, o.order_purchase_timestamp, oi.price
     FROM orders o
     inner join order_items oi on o.order_id = oi.order_id""")
     orders = res.fetchall()
@@ -58,7 +59,9 @@ def load_data(nb_elements=9999999):
 
     sorted_customers = {}
     for customer in [dict(customer) for customer in customers]:
-        sorted_customers.setdefault(customer['customer_unique_id'], []).append(customer['customer_id'])
+        sorted_customers.setdefault(
+            customer['customer_unique_id'], []).append(
+            customer['customer_id'])
 
     clients = []
     overall_earliest_purchase_date = None
@@ -76,8 +79,10 @@ def load_data(nb_elements=9999999):
         total_amount = sum([order['price'] for order in customer_orders])
         nb_products = len(customer_orders)
 
-        order_timestamps = [datetime.strptime(order['order_purchase_timestamp'], DATE_FORMAT)
-                            for order in customer_orders]
+        order_timestamps = [
+            datetime.strptime(
+                order['order_purchase_timestamp'],
+                DATE_FORMAT) for order in customer_orders]
         latest_purchase_date: datetime = max(order_timestamps)
         earliest_purchase_date: datetime = min(order_timestamps)
         days_since_last_purchase = (datetime.now() - latest_purchase_date).days
@@ -99,85 +104,172 @@ def load_data(nb_elements=9999999):
     return clients[:nb_elements], overall_earliest_purchase_date, overall_latest_purchase_date
 
 
-def get_first_timeperiod_clients(overall_earliest_purchase_date, weeks_number, clients):
-    days_since_first_period_start = (datetime.now() - overall_earliest_purchase_date).days
-
-    first_period_end_date = overall_earliest_purchase_date + timedelta(weeks=weeks_number)
-    days_since_first_period_end = (datetime.now() - first_period_end_date).days
-
-    return [client for client in clients if days_since_first_period_end < client['recency']
-            <= days_since_first_period_start]
-
-
-def get_second_timeperiod_clients(overall_earliest_purchase_date, weeks_number, clients):
-    second_period_start_date = overall_earliest_purchase_date + timedelta(weeks=weeks_number)
-    days_since_second_period_start = (datetime.now() - second_period_start_date).days
-
-    second_period_end_date = overall_earliest_purchase_date + timedelta(weeks=2 * weeks_number)
-    days_since_second_period_end = (datetime.now() - second_period_end_date).days
-
-    return [client for client in clients if days_since_second_period_end < client['recency']
-            <= days_since_second_period_start]
-
-
 def get_kmeans_model_fit_on_clients(clients):
-    scaled_clients = DataFrame(StandardScaler().fit_transform(DataFrame(clients)))
+    """Fit a Kmeans model with the best number of clusters on the given clients and returns it."""
+    scaled_clients = DataFrame(
+        StandardScaler().fit_transform(
+            DataFrame(clients)))
     model = KMeans(n_clusters=BEST_KMEANS_CLUSTERS_NUMBER, **kmeans_kwargs)
     model.fit(scaled_clients)
 
     return model
 
 
-def create_ari_scores_plot(ari_results):
-    plt.figure(figsize=(10, 9))
-    plot = sns.lineplot(DataFrame(ari_results), x="weeks_number", y="ari_score")
+def create_ari_scores_plot(ari_results, max_weeks_number, is_first=True):
+    """Generate and display a plot showing the ARI scores by week number."""
+    fig, ax = plt.subplots()
+    fig.set_size_inches(12, 12)
+    plot = sns.lineplot(
+        DataFrame(ari_results),
+        x="weeks_number",
+        y="ari_score",
+        ax=ax)
 
     plot.set_title("ARI score per weeks")
     plot.set_xlabel("Weeks number")
     plot.set_ylabel("ARI score")
+    ax.hlines(
+        y=0.7,
+        xmin=1,
+        xmax=max_weeks_number,
+        color='black',
+        linestyles='dashdot')
 
-    fig = plot.get_figure()
-    fig.savefig(f"simulation_plots/ari_scores.png")
+    fig.savefig(
+        f"simulation_plots/ari_scores_{'first' if is_first else 'second'}_method.png")
     plt.close()
 
 
-def create_ari_scores_plot_using_first_method(clients, overall_earliest_purchase_date, overall_week_numbers):
+def create_ari_scores_plot_using_first_method(
+        clients,
+        overall_earliest_purchase_date,
+        overall_week_numbers):
+    """Calculate and display the ARI scores of the simulation using two periods with a similar number of weeks."""
+
+    print("Starting simulation using the first method.\n")
     ari_results = []
-    for weeks_number in range(1, int(overall_week_numbers / 2 + 1)):
-        print(f"Considering periods of {weeks_number} week{'s' if weeks_number > 1 else ''}.")
+    max_weeks_number = int(overall_week_numbers / 2 + 1)
 
-        # TODO: Tu pourrais aussi avoir comme period b = totale periode, period c = totale periode - weeks number depuis la fin.
-        # Puis period a = period b - period c et tu predis tes 2 modeles sur period c
+    for weeks_number in range(1, max_weeks_number):
+        print(
+            f"Considering periods of {weeks_number} week{
+                's' if weeks_number > 1 else ''}.")
 
-        # Current method: en dessous de 0,7 il faut faire de la maintenance donc recreer un nouveau modele.
-        # Vu mes resultats ca veut dire ou je fais cette maintenance vers 9 semaines ou vers 7-8 mois.
+        days_since_first_period_start = (
+            datetime.now() - overall_earliest_purchase_date).days
+        first_period_end_date = overall_earliest_purchase_date + \
+            timedelta(weeks=weeks_number)
+        days_since_first_period_end = (
+            datetime.now() - first_period_end_date).days
+        first_timeperiod_clients = [client for client in clients if days_since_first_period_end < client['recency']
+                                    <= days_since_first_period_start]
 
-        # Current methode est meilleure quand la saisonabilite est tres forte genre tu as des soldes en automne,
-        # sinon la nouvelle est meilleure. Cest pour ca que j'ai 2 sunken courbes, genre 2 saisons speciales.
+        days_since_second_period_start = days_since_first_period_end
+        second_period_end_date = overall_earliest_purchase_date + \
+            timedelta(weeks=2 * weeks_number)
+        days_since_second_period_end = (
+            datetime.now() - second_period_end_date).days
+        second_timeperiod_clients = [client for client in clients if days_since_second_period_end < client['recency']
+                                     <= days_since_second_period_start]
 
-        first_timeperiod_clients = get_first_timeperiod_clients(overall_earliest_purchase_date, weeks_number, clients)
-        second_timeperiod_clients = get_second_timeperiod_clients(overall_earliest_purchase_date, weeks_number, clients)
         all_periods_clients = first_timeperiod_clients + second_timeperiod_clients
 
         if (len(first_timeperiod_clients) < BEST_KMEANS_CLUSTERS_NUMBER or
                 len(second_timeperiod_clients) < BEST_KMEANS_CLUSTERS_NUMBER):
-            print("Not enough clients in one of the time periods, skipping this iteration.\n")
+            print(
+                "Not enough clients in one of the time periods, skipping this iteration.\n")
             continue
         else:
-            print(f"Number of clients in the first time period: {len(first_timeperiod_clients)}, "
-                  f"number of clients in the second time period: {len(second_timeperiod_clients)}.")
+            print(
+                f"Number of clients in the first time period: {
+                    len(first_timeperiod_clients)}, " f"number of clients in the second time period: {
+                    len(second_timeperiod_clients)}.")
 
         model_a = get_kmeans_model_fit_on_clients(first_timeperiod_clients)
         model_b = get_kmeans_model_fit_on_clients(all_periods_clients)
 
-        scaled_second_period_clients = DataFrame(StandardScaler().fit_transform(DataFrame(second_timeperiod_clients)))
+        scaled_second_period_clients = DataFrame(
+            StandardScaler().fit_transform(
+                DataFrame(second_timeperiod_clients)))
         model_a_labels = model_a.predict(scaled_second_period_clients)
         model_b_labels = model_b.predict(scaled_second_period_clients)
 
-        ari_score = round(adjusted_rand_score(model_a_labels, model_b_labels), 4)
-        ari_results.append({'weeks_number': weeks_number, 'ari_score': ari_score})
+        ari_score = round(
+            adjusted_rand_score(
+                model_a_labels,
+                model_b_labels),
+            4)
+        ari_results.append(
+            {'weeks_number': weeks_number, 'ari_score': ari_score})
         print(f"ARI score:{ari_score} for weeks number:{weeks_number}.\n")
-    create_ari_scores_plot(ari_results)
+
+    create_ari_scores_plot(ari_results, max_weeks_number)
+
+
+def create_ari_scores_plot_using_second_method(
+        all_clients,
+        overall_earliest_purchase_date,
+        overall_latest_purchase_date,
+        overall_week_numbers):
+    """Calculate and display the ARI scores of the simulation using a first period of the given number of week and
+    a second period of the remaining weeks of the data.
+    """
+
+    print("Starting simulation using the second method.\n")
+    ari_results = []
+
+    for weeks_number in range(1, overall_week_numbers):
+        print(
+            f"Considering periods of {weeks_number} week{
+                's' if weeks_number > 1 else ''}.")
+
+        days_since_first_period_start = (
+            datetime.now() - overall_earliest_purchase_date).days
+        first_period_end_date = overall_earliest_purchase_date + \
+            timedelta(weeks=weeks_number)
+        days_since_first_period_end = (
+            datetime.now() - first_period_end_date).days
+        first_timeperiod_clients = [client for client in clients if days_since_first_period_end < client['recency']
+                                    <= days_since_first_period_start]
+
+        days_since_second_period_start = days_since_first_period_end
+        days_since_second_period_end = (
+            datetime.now() - overall_latest_purchase_date).days
+        second_timeperiod_clients = [client for client in all_clients if days_since_second_period_end < client['recency']
+                                     <= days_since_second_period_start]
+
+        all_periods_clients = first_timeperiod_clients + second_timeperiod_clients
+
+        if (len(first_timeperiod_clients) < BEST_KMEANS_CLUSTERS_NUMBER or
+                len(second_timeperiod_clients) < BEST_KMEANS_CLUSTERS_NUMBER):
+            print(
+                "Not enough clients in one of the time periods, skipping this iteration.\n")
+            continue
+        else:
+            print(
+                f"Number of clients in the first time period: {
+                    len(first_timeperiod_clients)}, " f"number of clients in the second time period: {
+                    len(second_timeperiod_clients)}.")
+
+        model_a = get_kmeans_model_fit_on_clients(first_timeperiod_clients)
+        model_b = get_kmeans_model_fit_on_clients(all_periods_clients)
+
+        scaled_second_period_clients = DataFrame(
+            StandardScaler().fit_transform(
+                DataFrame(second_timeperiod_clients)))
+        model_a_labels = model_a.predict(scaled_second_period_clients)
+        model_b_labels = model_b.predict(scaled_second_period_clients)
+
+        ari_score = round(
+            adjusted_rand_score(
+                model_a_labels,
+                model_b_labels),
+            4)
+        ari_results.append(
+            {'weeks_number': weeks_number, 'ari_score': ari_score})
+        print(f"ARI score:{ari_score} for weeks number:{weeks_number}.\n")
+
+    create_ari_scores_plot(ari_results, overall_week_numbers, is_first=False)
 
 
 if __name__ == '__main__':
@@ -185,14 +277,20 @@ if __name__ == '__main__':
     remove_last_run_plots()
 
     clients, overall_earliest_purchase_date, overall_latest_purchase_date = load_data()
+    # clients, overall_earliest_purchase_date, overall_latest_purchase_date = load_data(nb_elements=1000)
     print("Data loaded.\n")
 
-    overall_week_numbers = (overall_latest_purchase_date - overall_earliest_purchase_date).days // 7
+    overall_week_numbers = (
+        overall_latest_purchase_date - overall_earliest_purchase_date).days // 7
     print(f"Earliest purchase date:{overall_earliest_purchase_date}, "
           f"latest purchase date:{overall_latest_purchase_date}, overall week numbers:{overall_week_numbers}.\n")
 
-    create_ari_scores_plot_using_first_method(clients, overall_earliest_purchase_date, overall_week_numbers)
+    create_ari_scores_plot_using_first_method(
+        clients, overall_earliest_purchase_date, overall_week_numbers)
 
+    create_ari_scores_plot_using_second_method(
+        clients,
+        overall_earliest_purchase_date,
+        overall_latest_purchase_date,
+        overall_week_numbers)
     print("All processing is now done.")
-
-# TODO: ADD documentation like docstrings for each function
