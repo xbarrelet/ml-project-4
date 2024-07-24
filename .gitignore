@@ -168,5 +168,5 @@ resources/
 .idea/
 
 *.db
-
 *BAK*
+.~lock*

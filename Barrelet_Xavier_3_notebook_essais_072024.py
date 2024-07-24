@@ -13,7 +13,7 @@ from pandas.core.frame import DataFrame
 from scipy.cluster.hierarchy import linkage, dendrogram
 from sklearn.cluster import KMeans, DBSCAN, OPTICS, AgglomerativeClustering
 from sklearn.decomposition import PCA
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, adjusted_rand_score
 from sklearn.preprocessing import StandardScaler
 
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -28,6 +28,7 @@ MAX_CLUSTERS_NUMBER = 10
 
 
 def remove_last_run_plots():
+    """Removes the content of the saved plots."""
     shutil.rmtree('plots', ignore_errors=True)
     os.mkdir('plots')
 
@@ -47,18 +48,21 @@ def save_plot(plot, filename: str, prefix: str) -> None:
     plt.close()
 
 
-def load_data(nb_elements=9999999):
+def load_data(nb_elements=99999999):
+    """Load the data from the db, extract the RFM and average review attributes and returns them."""
     con = sqlite3.connect("resources/olist.db")
     con.row_factory = sqlite3.Row
     cur = con.cursor()
 
-    res = cur.execute("SELECT customer_id FROM customers where customer_id in (select customer_id from orders)")
+    res = cur.execute("""SELECT customer_id, customer_unique_id FROM customers 
+    where customer_id in (select customer_id from orders)""")
     customers = res.fetchall()
 
     res = cur.execute("select order_id, review_score from order_reviews")
     reviews = res.fetchall()
 
-    res = cur.execute("""SELECT o.order_id, o.customer_id, o.order_purchase_timestamp, oi.price
+    res = cur.execute(
+        """SELECT o.order_id, o.customer_id, o.order_purchase_timestamp, oi.price
     FROM orders o
     inner join order_items oi on o.order_id = oi.order_id""")
     orders = res.fetchall()
@@ -75,9 +79,18 @@ def load_data(nb_elements=9999999):
         order['review_score'] = sorted_reviews[order['order_id']][0] if order['order_id'] in sorted_reviews else None
         sorted_orders.setdefault(order['customer_id'], []).append(order)
 
+    sorted_customers = {}
+    for customer in [dict(customer) for customer in customers]:
+        sorted_customers.setdefault(customer['customer_unique_id'], []).append(customer['customer_id'])
+
     clients = []
-    for customer in customers:
-        customer_orders = sorted_orders[customer['customer_id']] if customer['customer_id'] in sorted_orders else []
+    for customer_unique_id in sorted_customers.keys():
+        customer_ids = sorted_customers[customer_unique_id]
+
+        customer_orders = []
+        for customer_id in customer_ids:
+            customer_orders += sorted_orders[customer_id] if customer_id in sorted_orders else []
+
         if len(customer_orders) == 0:
             continue
 
@@ -89,16 +102,16 @@ def load_data(nb_elements=9999999):
         latest_purchase_date: datetime = max(order_timestamps)
         days_since_last_purchase = (datetime.now() - latest_purchase_date).days
 
-        review_scores = [order['review_score'] for order in customer_orders if order['review_score'] is not None]
+        review_scores = [order['review_score']
+                         for order in customer_orders if order['review_score'] is not None]
         if len(review_scores) > 0:
             average_review = sum(review_scores) / len(review_scores)
         else:
             average_review = 0
 
-        # 36 customers are excluded and that eliminates some outliers in the PCA graphs and makes them more readable
+        # Excludes 71 clients for a better visibility of the clusters
         if nb_products < 8:
             clients.append({
-                # 'customer_id': customer['customer_id'],
                 'average_review': average_review,
                 'recency': days_since_last_purchase,
                 'frequency': nb_products,
@@ -109,6 +122,7 @@ def load_data(nb_elements=9999999):
 
 
 def fit_kmeans(scaled_features, kmeans_kwargs):
+    """Performs multiple Kmeans modelings and returns the SSE and silhouette scores."""
     sse = []
     silhouette_coefficients = []
 
@@ -130,6 +144,7 @@ def fit_kmeans(scaled_features, kmeans_kwargs):
 
 
 def create_sse_plot(sse):
+    """Display the SSE plot."""
     plt.figure(figsize=(10, 9))
     plot = sns.lineplot(DataFrame(sse), x=range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1), y=sse)
 
@@ -141,8 +156,7 @@ def create_sse_plot(sse):
 
 
 def create_silhouette_score_plot(silhouette_coefficients):
-    # The silhouette coefficient is a measure of cluster cohesion and separation.
-    # It quantifies how well a data point fits into its assigned cluster.
+    """Generate a plot showing the silhouette score per cluster numbers and display it."""
     plt.figure(figsize=(10, 9))
     plot = sns.lineplot(DataFrame(silhouette_coefficients), x=range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1),
                         y=silhouette_coefficients)
@@ -154,14 +168,17 @@ def create_silhouette_score_plot(silhouette_coefficients):
     save_plot(plot, "silhouette_coefficient", "kmeans")
 
 
-def perform_kmeans_clustering(scaled_df):
-    print("Starting KMEANS clustering.\n")
+def perform_kmeans_modeling(scaled_df):
+    """Performs multiple Kmeans modelings, produces SSE and silhouette score plots
+    and returns the best number of clusters based on the elbow method and its labels.
+    """
+    print("Starting KMEANS modeling.\n")
 
     kmeans_kwargs = {
         "init": "k-means++",
         "n_init": 50,
-        "max_iter": 500,
-        "random_state": 42}
+        "max_iter": 500
+    }
 
     sse, silhouette_coefficients = fit_kmeans(scaled_df, kmeans_kwargs)
     create_sse_plot(sse)
@@ -170,11 +187,15 @@ def perform_kmeans_clustering(scaled_df):
     kl = KneeLocator(range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1), sse, curve="convex", direction="decreasing")
     print(f"\nElbow found at iteration:{kl.elbow}.\n")
 
-    return kl.elbow
+    kmeans = KMeans(n_clusters=kl.elbow, **kmeans_kwargs)
+    kmeans.fit(scaled_df)
+
+    return kl.elbow, kmeans.labels_
 
 
-def perform_hierarchical_clustering(scaled_df):
-    print("\nStarting hierarchical clustering.\n")
+def perform_hierarchical_modeling(scaled_df):
+    """Performs hierarchical modeling."""
+    print("\nStarting hierarchical modeling.\n")
 
     for clusters_number in range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1):
         hierarchical_cluster = AgglomerativeClustering(n_clusters=clusters_number, metric='euclidean', linkage='ward')
@@ -182,19 +203,20 @@ def perform_hierarchical_clustering(scaled_df):
 
         visualize_clusters(scaled_df, labels, f"hierarchical")
 
-    # TODO: The dendrogram should be adapted to your current model, not generic like here as it's meaningless
     plt.figure(figsize=(15, 15))
     dendrogram(linkage(scaled_df, method="ward", metric="euclidean"), truncate_mode="level", p=6)
     plt.savefig(f"plots/hierarchical/dendrogram.png")
 
 
-def perform_density_based_clustering(scaled_df):
+def perform_density_based_modeling(scaled_df):
+    """Performs DBSCAN and OPTICS modeling."""
     perform_dbscan_clustering(scaled_df)
     perform_optics_clustering(scaled_df)
 
 
 def perform_optics_clustering(scaled_df):
-    print("\nStarting OPTICS clustering.\n")
+    """Performs OPTICS modeling."""
+    print("\nStarting OPTICS modeling.\n")
 
     for min_samples in range(25, 150, 5):
         optics = OPTICS(min_samples=min_samples)
@@ -202,14 +224,13 @@ def perform_optics_clustering(scaled_df):
         labels = optics.labels_
 
         clusters_number = len(unique(labels))
-        print(f"min_samples:{min_samples}, number of clusters:{clusters_number}")
-
         if MIN_CLUSTERS_NUMBER <= clusters_number <= MAX_CLUSTERS_NUMBER:
             visualize_clusters(scaled_df, labels, f"optics_min_samples_{min_samples}")
 
 
 def perform_dbscan_clustering(scaled_df):
-    print("Starting DBSCAN clustering.\n")
+    """Performs DBSCAN modeling."""
+    print("Starting DBSCAN modeling.\n")
 
     for eps in np.arange(0.01, 2, 0.01):
         dbscan = DBSCAN(eps=eps, min_samples=100)
@@ -217,16 +238,14 @@ def perform_dbscan_clustering(scaled_df):
         labels = dbscan.labels_
 
         clusters_number = len(unique(labels))
-        print(f"eps:{round(eps, 2)}, number of clusters:{clusters_number}")
-
         if MIN_CLUSTERS_NUMBER <= clusters_number <= MAX_CLUSTERS_NUMBER:
             visualize_clusters(scaled_df, labels, f"dbscan_eps_{round(eps, 2)}")
 
 
 def visualize_clusters(scaled_df, labels, strategy_name):
+    """Generate a PCA graph showing the generated clusters and display the plot."""
     labels = pd.Categorical(labels)
 
-    # TODO: Can I save this pca_df somewhere? How slow is the calculation anyway?
     pca = PCA()
     pca_results = pca.fit_transform(scaled_df)
     pca_df = DataFrame(pca_results[:, :2], columns=['x', 'y'])
@@ -244,35 +263,45 @@ def visualize_clusters(scaled_df, labels, strategy_name):
               f"{strategy_name.split("_")[0]}")
 
 
-def verify_form_and_stability_of_best_strategy(scaled_df, best_kmeans_number_of_clusters):
+def verify_form_and_stability_of_best_strategy(scaled_df, best_kmeans_number_of_clusters, original_labels):
+    """Performs multiple kmeans modeling with the best clusters number to verify its form and result."""
     print("Starting verification of form and stability of the best strategy.\n")
 
-    for iteration in range(1, 11):
+    overall_ari_score = 0.0
+    iterations_number = 10
+    for iteration in range(1, iterations_number + 1):
         kmeans = KMeans(n_clusters=best_kmeans_number_of_clusters)
         kmeans.fit(scaled_df)
         labels = kmeans.labels_
 
         visualize_clusters(scaled_df, labels, f"final_kmeans_iteration_{iteration}")
 
+        ari_score = round(adjusted_rand_score(labels, original_labels), 4)
+        overall_ari_score += ari_score
+
+    print(f"Average ari score:{round(overall_ari_score / iterations_number, 2)} "
+          f"across {iterations_number} iterations.\n")
+
 
 if __name__ == '__main__':
-    print("Let's start project 4.\n")
+    print("Starting modeling script.\n")
 
     remove_last_run_plots()
 
-    # df: DataFrame = load_data()
-    df: DataFrame = load_data(nb_elements=100000)
+    # df: DataFrame = load_data(nb_elements=20000)
+    df: DataFrame = load_data()
     print("Data loaded.\n")
 
     scaled_df = DataFrame(StandardScaler().fit_transform(df), columns=df.columns)
+    smaller_scaled_df = scaled_df.sample(n=50000, random_state=42)
 
-    best_kmeans_number_of_clusters = perform_kmeans_clustering(scaled_df)
+    best_kmeans_number_of_clusters, kmeans_labels = perform_kmeans_modeling(scaled_df)
 
-    perform_density_based_clustering(scaled_df)
+    perform_density_based_modeling(smaller_scaled_df)
 
-    perform_hierarchical_clustering(scaled_df)
+    perform_hierarchical_modeling(smaller_scaled_df)
 
-    verify_form_and_stability_of_best_strategy(scaled_df, best_kmeans_number_of_clusters)
+    verify_form_and_stability_of_best_strategy(scaled_df, best_kmeans_number_of_clusters, kmeans_labels)
 
     print("All processing is now done.")
 

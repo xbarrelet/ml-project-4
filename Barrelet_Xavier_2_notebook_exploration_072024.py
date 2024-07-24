@@ -21,11 +21,12 @@ pd.set_option('display.max_columns', None)
 
 
 def remove_last_run_plots():
+    """Removes the content of the saved plots."""
     shutil.rmtree('analysis_plots', ignore_errors=True)
     os.mkdir('analysis_plots')
 
 
-def save_plot(plot, filename: str, prefix: str) -> None:
+def display_plot(plot, filename: str, prefix: str) -> None:
     os.makedirs(f"analysis_plots/{prefix}", exist_ok=True)
 
     # fig = plot.get_figure()
@@ -41,11 +42,13 @@ def save_plot(plot, filename: str, prefix: str) -> None:
 
 
 def load_data():
+    """Load the data from the db, extract the RFM and average review attributes and returns them."""
     con = sqlite3.connect("resources/olist.db")
     con.row_factory = sqlite3.Row
     cur = con.cursor()
 
-    res = cur.execute("SELECT customer_id FROM customers where customer_id in (select customer_id from orders)")
+    res = cur.execute("""SELECT customer_id, customer_unique_id FROM customers 
+    where customer_id in (select customer_id from orders)""")
     customers = res.fetchall()
 
     res = cur.execute("select order_id, review_score from order_reviews")
@@ -62,25 +65,30 @@ def load_data():
 
     sorted_reviews = {}
     for review in reviews:
-        sorted_reviews.setdefault(
-            review['order_id'],
-            []).append(
-            review['review_score'])
+        sorted_reviews.setdefault(review['order_id'], []).append(review['review_score'])
 
     sorted_orders = {}
     for order in [dict(order) for order in orders]:
         order['review_score'] = sorted_reviews[order['order_id']][0] if order['order_id'] in sorted_reviews else None
         sorted_orders.setdefault(order['customer_id'], []).append(order)
 
+    sorted_customers = {}
+    for customer in [dict(customer) for customer in customers]:
+        sorted_customers.setdefault(customer['customer_unique_id'], []).append(customer['customer_id'])
+
     clients = []
-    for customer in customers:
-        customer_orders = sorted_orders[customer['customer_id']] if customer['customer_id'] in sorted_orders else []
+    for customer_unique_id in sorted_customers.keys():
+        customer_ids = sorted_customers[customer_unique_id]
+
+        customer_orders = []
+        for customer_id in customer_ids:
+            customer_orders += sorted_orders[customer_id] if customer_id in sorted_orders else []
+
         if len(customer_orders) == 0:
             continue
 
         total_amount = sum([order['price'] for order in customer_orders])
         nb_products = len(customer_orders)
-        # nb_products = len(set([order['order_id'] for order in customer_orders]))
 
         order_timestamps = [datetime.strptime(order['order_purchase_timestamp'], DATE_FORMAT)
                             for order in customer_orders]
@@ -94,17 +102,20 @@ def load_data():
         else:
             average_review = 0
 
-        clients.append({
-            'average_review': average_review,
-            'recency': days_since_last_purchase,
-            'frequency': nb_products,
-            'monetary_value': total_amount
-        })
+        # Excludes 71 clients for a better visibility of the clusters
+        if nb_products < 8:
+            clients.append({
+                'average_review': average_review,
+                'recency': days_since_last_purchase,
+                'frequency': nb_products,
+                'monetary_value': total_amount
+            })
 
     return DataFrame(clients)
 
 
 def save_rfm_stats(df: DataFrame):
+    """Generate and display a table containing the RFM stats per segment."""
     RFM_stats = df.groupby("RFM_Level").agg({
         'recency': 'mean',
         'frequency': 'mean',
@@ -127,6 +138,7 @@ def save_rfm_stats(df: DataFrame):
 
 
 def save_rfm_segments(RFM_stats):
+    """Display the RFM segments in a square plot."""
     fig = plt.gcf()
     fig.set_size_inches(16, 9)
 
@@ -156,6 +168,7 @@ def save_rfm_segments(RFM_stats):
 
 
 def create_pieplot_for_RFM_segments(df, prefix):
+    """Generate and display the pie plot for the RFM segments."""
     unique_values = df["RFM_Level"].unique()
     data = []
     labels = []
@@ -174,6 +187,7 @@ def create_pieplot_for_RFM_segments(df, prefix):
 
 
 def visualize_data(df, prefix):
+    """Generate and display the distribution plot for all attributes."""
     create_visualization_plot_for_attribute(df, "Recency", prefix)
     create_visualization_plot_for_attribute(df, "Frequency", prefix)
     create_visualization_plot_for_attribute(df, "Monetary_Value", prefix)
@@ -185,6 +199,7 @@ def visualize_data(df, prefix):
 
 
 def create_visualization_plot_for_attribute(df, attribute: str, prefix):
+    """Generate and display the distribution plot for the given attribute."""
     column_name = attribute.lower().replace(" ", "_")
 
     if column_name != "rfm_score":
@@ -194,10 +209,11 @@ def create_visualization_plot_for_attribute(df, attribute: str, prefix):
         plot.set_xlabels(attribute.replace("average_review", "Average Review"))
         plot.set_ylabels("Count")
 
-        save_plot(plot, f"{column_name}_distplot", f"visualization_{prefix}")
+        display_plot(plot, f"{column_name}_distplot", f"visualization_{prefix}")
 
 
 def add_rfm_columns(df):
+    """Add RFM related columns to dataframe."""
     Rlabel = range(4, 0, -1)
     Mlabel = range(1, 5)
 
@@ -212,6 +228,7 @@ def add_rfm_columns(df):
 
 
 def rfm_level(df):
+    """Returns the RFM level in text from the RFM score."""
     if (df['RFM_Score'] >= 7) and (df['RFM_Score'] < 9):
         return 'Champions'
     elif (df['RFM_Score'] >= 6) and (df['RFM_Score'] < 7):
@@ -235,15 +252,10 @@ def visualize_rfm_segments(df):
 
 if __name__ == '__main__':
     print("Starting the exploration script.\n")
-
     remove_last_run_plots()
 
     df: DataFrame = load_data()
-    print("Data loaded.\n")
-
-    customers_with_more_than_one_product = df[df['frequency'] > 1]
-    print(f"Customers with more than one product:{len(customers_with_more_than_one_product)} on {len(df)}, "
-          f"or {round(len(customers_with_more_than_one_product) * 100 / len(df), 2)}%\n")
+    print(f"Data loaded with {len(df)} customers.\n")
 
     df = add_rfm_columns(df)
     visualize_rfm_segments(df)
@@ -252,6 +264,7 @@ if __name__ == '__main__':
     visualize_data(df, "pre_scaling")
 
     df.drop(columns=["RFM_Level"], axis=1, inplace=True)
+
     scaled_df = DataFrame(StandardScaler().fit_transform(df), columns=df.columns)
     visualize_data(scaled_df, "after_scaling")
 
