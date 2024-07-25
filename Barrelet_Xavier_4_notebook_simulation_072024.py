@@ -266,7 +266,8 @@ def create_ari_scores_plot_using_second_method(
                 model_b_labels),
             4)
         ari_results.append(
-            {'weeks_number': weeks_number, 'ari_score': ari_score})
+            {'weeks_number': overall_week_numbers - weeks_number,
+             'ari_score': ari_score})
         print(f"ARI score:{ari_score} for weeks number:{weeks_number}.\n")
 
     create_ari_scores_plot(ari_results, overall_week_numbers, is_first=False)

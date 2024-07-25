@@ -74,7 +74,7 @@ def load_data():
     sorted_orders = {}
     for order in [dict(order) for order in orders]:
         order['review_score'] = sorted_reviews[order['order_id']
-                                               ][0] if order['order_id'] in sorted_reviews else None
+        ][0] if order['order_id'] in sorted_reviews else None
         sorted_orders.setdefault(order['customer_id'], []).append(order)
 
     sorted_customers = {}
@@ -128,14 +128,16 @@ def save_rfm_stats(df: DataFrame):
     RFM_stats = df.groupby("RFM_Level").agg({
         'recency': 'mean',
         'frequency': 'mean',
-        'monetary_value': ['mean', 'count']
+        'monetary_value': ['mean', 'count'],
+        'RFM_Score': 'mean'
     }).round(1)
     RFM_stats.columns = RFM_stats.columns.droplevel()
     RFM_stats.columns = [
         'Recency_Mean',
         'Frequency_Mean',
         'MonetaryValue_Mean',
-        'MonetaryValue_Count']
+        'MonetaryValue_Count',
+        'RFM_Score_Mean']
     RFM_stats.sort_values("MonetaryValue_Count", ascending=False, inplace=True)
 
     dfi.export(
@@ -160,16 +162,14 @@ def save_rfm_segments(RFM_stats):
             'Loyaux',
             'Loyalistes potentiels',
             'À réactiver',
-            'À risque',
-            'Perdus'
+            'À risque'
         ],
         color=[
             "green",
             "orange",
             "purple",
             "maroon",
-            "pink",
-            "teal"],
+            "pink"],
         alpha=0.6)
     plot.set_title("RFM Segments")
     plot.set_axis_off()
@@ -234,7 +234,7 @@ def add_rfm_columns(df):
 
     df['R'] = pd.qcut(df['recency'], q=4, labels=Rlabel).values
     df['M'] = pd.qcut(df['monetary_value'], q=4, labels=Mlabel).values
-    df['F'] = np.where(df['frequency'] == 1, 1, 2)  # Good enough
+    df['F'] = np.where(df['frequency'] == 1, 1, 2)
 
     df['RFM_Score'] = df[['R', 'F', 'M']].sum(axis=1)
     df['RFM_Level'] = df.apply(rfm_level, axis=1)
@@ -244,7 +244,7 @@ def add_rfm_columns(df):
 
 def rfm_level(df):
     """Returns the RFM level in text from the RFM score."""
-    if (df['RFM_Score'] >= 7) and (df['RFM_Score'] < 9):
+    if df['RFM_Score'] >= 7:
         return 'Champions'
     elif (df['RFM_Score'] >= 6) and (df['RFM_Score'] < 7):
         return 'Loyaux'

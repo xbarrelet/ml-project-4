@@ -170,3 +170,4 @@ resources/
 *.db
 *BAK*
 .~lock*
+*.zip
