@@ -315,12 +315,41 @@ def visualize_clusters(scaled_df, labels, strategy_name):
                  f"{strategy_name.split("_")[0]}")
 
 
+def generate_and_display_ari_scores_plot(ari_scores):
+    """Generate and display a plot showing the ARI scores by week number."""
+    fig, ax = plt.subplots()
+    fig.set_size_inches(12, 12)
+    plot = sns.lineplot(
+        DataFrame(ari_scores),
+        x="iteration",
+        y="ari_score",
+        ax=ax)
+
+    average_score = round(
+        sum(
+            [score['ari_score'] for score in ari_scores]) /
+        len(ari_scores),
+        2)
+    plot.set_title(f"ARI score per iteration, average score:{average_score}")
+    plot.set_xlabel("Iteration")
+    plot.set_ylabel("ARI score")
+    ax.hlines(
+        y=0.7,
+        xmin=1,
+        xmax=len(ari_scores),
+        color='black',
+        linestyles='dashdot')
+
+    display_plot(plot, "ari_scores", "final")
+    plt.close()
+
+
 def verify_form_and_stability_of_best_strategy(scaled_df, original_labels):
     """Performs multiple kmeans modeling with the best clusters number to verify its form and result."""
     print("Starting verification of form and stability of the best strategy.\n")
 
-    overall_ari_score = 0.0
-    iterations_number = 10
+    iterations_number = 20
+    ari_scores = []
     for iteration in range(1, iterations_number + 1):
         kmeans = KMeans(n_clusters=BEST_KMEANS_CLUSTERS_NUMBER)
         kmeans.fit(scaled_df)
@@ -332,20 +361,15 @@ def verify_form_and_stability_of_best_strategy(scaled_df, original_labels):
             f"final_kmeans_iteration_{iteration}")
 
         ari_score = round(adjusted_rand_score(labels, original_labels), 4)
-        overall_ari_score += ari_score
+        ari_scores.append({"ari_score": ari_score, "iteration": iteration})
 
-    print(
-        f"Average ari score:{
-            round(
-                overall_ari_score /
-                iterations_number,
-                2)} " f"across {iterations_number} iterations.\n")
+    generate_and_display_ari_scores_plot(ari_scores)
 
 
 if __name__ == '__main__':
     print("Starting modeling script.\n")
 
-    remove_last_run_plots()
+    # remove_last_run_plots()
 
     # df: DataFrame = load_data(nb_elements=20000)
     df: DataFrame = load_data()
