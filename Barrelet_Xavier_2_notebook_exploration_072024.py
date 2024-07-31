@@ -1,3 +1,4 @@
+import itertools
 import os
 import shutil
 import sqlite3
@@ -61,20 +62,37 @@ def load_data():
     inner join order_items oi on o.order_id = oi.order_id""")
     orders = res.fetchall()
 
+    res = cur.execute("select order_id, payment_type from order_pymts where payment_type != 'not_defined'")
+    payments = res.fetchall()
+
     cur.close()
     con.close()
 
     sorted_reviews = {}
     for review in reviews:
-        sorted_reviews.setdefault(
-            review['order_id'],
-            []).append(
-            review['review_score'])
+        sorted_reviews.setdefault(review['order_id'], []).append(review['review_score'])
+
+    sorted_payments = {}
+    for payment in payments:
+        sorted_payments.setdefault(payment['order_id'], set()).add(payment['payment_type'])
 
     sorted_orders = {}
     for order in [dict(order) for order in orders]:
-        order['review_score'] = sorted_reviews[order['order_id']
-        ][0] if order['order_id'] in sorted_reviews else None
+        order_id = order['order_id']
+        order['review_score'] = sorted_reviews[order_id][0] if order['order_id'] in sorted_reviews else None
+
+        if order_id in sorted_payments and len(sorted_payments[order_id]) > 1:
+            if 'voucher' in sorted_payments[order_id]:
+                sorted_payments[order_id].remove('voucher')
+                payment_type = sorted_payments[order_id].pop()
+                sorted_payments[order_id].add(payment_type + "_with_voucher")
+            # only 1 case with debit_card + credit_card, I'm skipping it
+            else:
+                continue
+        elif order_id not in sorted_payments:
+            continue
+
+        order['payment_type'] = sorted_payments[order_id] if order['order_id'] in sorted_payments else None
         sorted_orders.setdefault(order['customer_id'], []).append(order)
 
     sorted_customers = {}
@@ -111,13 +129,22 @@ def load_data():
         else:
             average_review = 0
 
+        payment_types = set(list(itertools.chain.from_iterable(
+            [list(order['payment_type']) for order in customer_orders])
+        ))
+        if len(payment_types) == 1:
+            payment_type = list(payment_types)[0]
+        else:
+            payment_type = "multiple"
+
         # Excludes 71 clients for a better visibility of the clusters
         if nb_products < 8:
             clients.append({
                 'average_review': average_review,
                 'recency': days_since_last_purchase,
                 'frequency': nb_products,
-                'monetary_value': total_amount
+                'monetary_value': total_amount,
+                'payment_type': payment_type
             })
 
     return DataFrame(clients)
@@ -198,6 +225,26 @@ def create_pieplot_for_RFM_segments(df, prefix):
     plt.close()
 
 
+def create_pieplot_for_payment_types(df, prefix):
+    """Generate and display the pie plot for the RFM segments."""
+    unique_values = df["payment_type"].unique()
+    data = []
+    labels = []
+
+    for value in unique_values:
+        values_count = df["payment_type"].value_counts()[value]
+        data.append(values_count)
+        labels.append(value)
+
+    plt.figure(figsize=(10, 8))
+    colors = sns.color_palette('pastel')[0:6]
+    plt.pie(data, labels=labels, colors=colors, autopct='%.0f%%')
+    plt.title('Payment types')
+    plt.savefig(
+        f"analysis_plots/visualization_{prefix}/payment_types_pieplot.png")
+    plt.close()
+
+
 def visualize_data(df, prefix):
     """Generate and display the distribution plot for all attributes."""
     create_visualization_plot_for_attribute(df, "Recency", prefix)
@@ -205,6 +252,9 @@ def visualize_data(df, prefix):
     create_visualization_plot_for_attribute(df, "Monetary_Value", prefix)
     create_visualization_plot_for_attribute(df, "average_review", prefix)
     create_visualization_plot_for_attribute(df, "RFM_Score", prefix)
+
+    if "payment_type" in df.columns:
+        create_pieplot_for_payment_types(df, prefix)
 
     if "RFM_Level" in df.columns:
         create_pieplot_for_RFM_segments(df, prefix)
@@ -279,6 +329,7 @@ if __name__ == '__main__':
     visualize_data(df, "pre_scaling")
 
     df.drop(columns=["RFM_Level"], axis=1, inplace=True)
+    df.drop(columns=["payment_type"], axis=1, inplace=True)
 
     scaled_df = DataFrame(
         StandardScaler().fit_transform(df),

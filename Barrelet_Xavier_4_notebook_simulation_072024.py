@@ -1,3 +1,4 @@
+import itertools
 import os
 import shutil
 import sqlite3
@@ -8,8 +9,8 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 from pandas.core.frame import DataFrame
 from sklearn.cluster import KMeans
-from sklearn.metrics import adjusted_rand_score
-from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import adjusted_rand_score, silhouette_score
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -18,7 +19,7 @@ plt.style.use("fivethirtyeight")
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
-BEST_KMEANS_CLUSTERS_NUMBER = 4
+BEST_KMEANS_CLUSTERS_NUMBER = 3
 
 kmeans_kwargs = {
     "init": "k-means++",
@@ -34,7 +35,7 @@ def remove_last_run_plots():
     os.mkdir('simulation_plots')
 
 
-def load_data(nb_elements=9999999):
+def load_data(nb_elements=99999999):
     """Load the data from the db, extract the RFM and average review attributes and returns them."""
     con = sqlite3.connect("resources/olist.db")
     con.row_factory = sqlite3.Row
@@ -44,17 +45,49 @@ def load_data(nb_elements=9999999):
     where customer_id in (select customer_id from orders)""")
     customers = res.fetchall()
 
+    res = cur.execute("select order_id, review_score from order_reviews")
+    reviews = res.fetchall()
+
     res = cur.execute(
         """SELECT o.order_id, o.customer_id, o.order_purchase_timestamp, oi.price
     FROM orders o
     inner join order_items oi on o.order_id = oi.order_id""")
     orders = res.fetchall()
 
+    res = cur.execute("select order_id, payment_type from order_pymts where payment_type != 'not_defined'")
+    payments = res.fetchall()
+
     cur.close()
     con.close()
 
+    sorted_reviews = {}
+    for review in reviews:
+        sorted_reviews.setdefault(
+            review['order_id'],
+            []).append(
+            review['review_score'])
+
+    sorted_payments = {}
+    for payment in payments:
+        sorted_payments.setdefault(payment['order_id'], set()).add(payment['payment_type'])
+
     sorted_orders = {}
     for order in [dict(order) for order in orders]:
+        order_id = order['order_id']
+        order['review_score'] = sorted_reviews[order_id][0] if order['order_id'] in sorted_reviews else None
+
+        if order_id in sorted_payments and len(sorted_payments[order_id]) > 1:
+            if 'voucher' in sorted_payments[order_id]:
+                sorted_payments[order_id].remove('voucher')
+                payment_type = sorted_payments[order_id].pop()
+                sorted_payments[order_id].add(payment_type + "_with_voucher")
+            # only 1 case with debit_card + credit_card, I'm skipping it
+            else:
+                continue
+        elif order_id not in sorted_payments:
+            continue
+
+        order['payment_type'] = sorted_payments[order_id] if order['order_id'] in sorted_payments else None
         sorted_orders.setdefault(order['customer_id'], []).append(order)
 
     sorted_customers = {}
@@ -85,7 +118,7 @@ def load_data(nb_elements=9999999):
                 DATE_FORMAT) for order in customer_orders]
         latest_purchase_date: datetime = max(order_timestamps)
         earliest_purchase_date: datetime = min(order_timestamps)
-        days_since_last_purchase = (datetime.now() - latest_purchase_date).days
+        days_since_first_purchase = (datetime.now() - earliest_purchase_date).days
 
         if overall_earliest_purchase_date is None or overall_earliest_purchase_date > earliest_purchase_date:
             overall_earliest_purchase_date = earliest_purchase_date
@@ -93,29 +126,58 @@ def load_data(nb_elements=9999999):
         if overall_latest_purchase_date is None or overall_latest_purchase_date < latest_purchase_date:
             overall_latest_purchase_date = latest_purchase_date
 
+        review_scores = [order['review_score']
+                         for order in customer_orders if order['review_score'] is not None]
+        if len(review_scores) > 0:
+            average_review = sum(review_scores) / len(review_scores)
+        else:
+            average_review = 0
+
+        payment_types = set(list(itertools.chain.from_iterable(
+            [list(order['payment_type']) for order in customer_orders])
+        ))
+        if len(payment_types) == 1:
+            payment_type = list(payment_types)[0]
+        else:
+            payment_type = "multiple"
+
         # Excludes 71 clients for a better visibility of the clusters
         if nb_products < 8:
             clients.append({
-                'recency': days_since_last_purchase,
+                'average_review': average_review,
+                'days_since_first_purchase': days_since_first_purchase,
                 'frequency': nb_products,
-                'monetary_value': total_amount
+                'monetary_value': total_amount,
+                "payment_type": payment_type
             })
 
     return clients[:nb_elements], overall_earliest_purchase_date, overall_latest_purchase_date
 
 
+def prepare_data(df):
+    one_hot_encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+
+    payment_type_df = one_hot_encoder.fit_transform(df[["payment_type"]])
+    payment_type_df = DataFrame(payment_type_df, columns=one_hot_encoder.get_feature_names_out())
+    payment_type_df.index = df.index
+
+    df.drop("payment_type", axis=1, inplace=True)
+    scaled_df = DataFrame(StandardScaler().fit_transform(df), columns=df.columns)
+    encoded_df = pd.concat([scaled_df, payment_type_df], axis=1)
+
+    return encoded_df
+
+
 def get_kmeans_model_fit_on_clients(clients):
     """Fit a Kmeans model with the best number of clusters on the given clients and returns it."""
-    scaled_clients = DataFrame(
-        StandardScaler().fit_transform(
-            DataFrame(clients)))
+    prepared_df = prepare_data(DataFrame(clients))
     model = KMeans(n_clusters=BEST_KMEANS_CLUSTERS_NUMBER, **kmeans_kwargs)
-    model.fit(scaled_clients)
+    model.fit(prepared_df)
 
     return model
 
 
-def create_ari_scores_plot(ari_results, max_weeks_number, is_first=True):
+def create_ari_scores_plot(ari_results, max_weeks_number, weeks_number_for_first_period):
     """Generate and display a plot showing the ARI scores by week number."""
     fig, ax = plt.subplots()
     fig.set_size_inches(12, 12)
@@ -135,163 +197,150 @@ def create_ari_scores_plot(ari_results, max_weeks_number, is_first=True):
         color='black',
         linestyles='dashdot')
 
-    fig.savefig(
-        f"simulation_plots/ari_scores_{'first' if is_first else 'second'}_method.png")
+    fig.savefig(f"simulation_plots/ari_scores_{weeks_number_for_first_period}.png")
     plt.close()
 
 
-def create_ari_scores_plot_using_first_method(
-        clients,
-        overall_earliest_purchase_date,
-        overall_week_numbers):
-    """Calculate and display the ARI scores of the simulation using two periods with a similar number of weeks."""
+def create_ssd_plot(sse, overall_weeks_number):
+    """Display the SSD plot."""
+    plt.figure(figsize=(10, 9))
+    plot = sns.lineplot(
+        DataFrame(sse),
+        x=range(1, overall_weeks_number + 1),
+        y=sse)
 
-    print("Starting simulation using the first method.\n")
-    ari_results = []
-    max_weeks_number = int(overall_week_numbers / 2 + 1)
+    plot.set_title("SSD curve")
+    plot.set_xlabel("Number of weeks")
+    plot.set_ylabel("SSD")
 
-    for weeks_number in range(1, max_weeks_number):
-        print(
-            f"Considering periods of {weeks_number} week{
-                's' if weeks_number > 1 else ''}.")
-
-        days_since_first_period_start = (
-            datetime.now() - overall_earliest_purchase_date).days
-        first_period_end_date = overall_earliest_purchase_date + \
-            timedelta(weeks=weeks_number)
-        days_since_first_period_end = (
-            datetime.now() - first_period_end_date).days
-        first_timeperiod_clients = [client for client in clients if days_since_first_period_end < client['recency']
-                                    <= days_since_first_period_start]
-
-        days_since_second_period_start = days_since_first_period_end
-        second_period_end_date = overall_earliest_purchase_date + \
-            timedelta(weeks=2 * weeks_number)
-        days_since_second_period_end = (
-            datetime.now() - second_period_end_date).days
-        second_timeperiod_clients = [client for client in clients if days_since_second_period_end < client['recency']
-                                     <= days_since_second_period_start]
-
-        all_periods_clients = first_timeperiod_clients + second_timeperiod_clients
-
-        if (len(first_timeperiod_clients) < BEST_KMEANS_CLUSTERS_NUMBER or
-                len(second_timeperiod_clients) < BEST_KMEANS_CLUSTERS_NUMBER):
-            print(
-                "Not enough clients in one of the time periods, skipping this iteration.\n")
-            continue
-        else:
-            print(
-                f"Number of clients in the first time period: {
-                    len(first_timeperiod_clients)}, " f"number of clients in the second time period: {
-                    len(second_timeperiod_clients)}.")
-
-        model_a = get_kmeans_model_fit_on_clients(first_timeperiod_clients)
-        model_b = get_kmeans_model_fit_on_clients(all_periods_clients)
-
-        scaled_second_period_clients = DataFrame(
-            StandardScaler().fit_transform(
-                DataFrame(second_timeperiod_clients)))
-        model_a_labels = model_a.predict(scaled_second_period_clients)
-        model_b_labels = model_b.predict(scaled_second_period_clients)
-
-        ari_score = round(
-            adjusted_rand_score(
-                model_a_labels,
-                model_b_labels),
-            4)
-        ari_results.append(
-            {'weeks_number': weeks_number, 'ari_score': ari_score})
-        print(f"ARI score:{ari_score} for weeks number:{weeks_number}.\n")
-
-    create_ari_scores_plot(ari_results, max_weeks_number)
+    fig = plot.get_figure()
+    fig.savefig(f"simulation_plots/first_period_ssd.png")
+    plt.close()
 
 
-def create_ari_scores_plot_using_second_method(
-        all_clients,
-        overall_earliest_purchase_date,
-        overall_latest_purchase_date,
-        overall_week_numbers):
-    """Calculate and display the ARI scores of the simulation using a first period of the given number of week and
-    a second period of the remaining weeks of the data.
-    """
+def create_silhouette_score_plot(silhouette_coefficients, overall_weeks_number):
+    """Generate a plot showing the silhouette score per cluster numbers and display it."""
+    plt.figure(figsize=(10, 9))
+    plot = sns.lineplot(
+        DataFrame(silhouette_coefficients),
+        x=range(1, overall_weeks_number + 1),
+        y=silhouette_coefficients)
 
-    print("Starting simulation using the second method.\n")
+    plot.set_title("Silhouette Coefficient curve")
+    plot.set_xlabel("Number of weeks")
+    plot.set_ylabel("Silhouette Coefficient")
+
+    fig = plot.get_figure()
+    fig.savefig(f"simulation_plots/first_period_silhouette.png")
+    plt.close()
+
+
+def perform_simulation(overall_earliest_purchase_date, weeks_number_for_first_period, all_clients):
     ari_results = []
 
-    for weeks_number in range(1, overall_week_numbers):
-        print(
-            f"Considering periods of {weeks_number} week{
-                's' if weeks_number > 1 else ''}.")
+    days_since_first_period_start = (datetime.now() - overall_earliest_purchase_date).days
+    days_since_first_period_end = days_since_first_period_start - weeks_number_for_first_period * 7
 
-        days_since_first_period_start = (
-            datetime.now() - overall_earliest_purchase_date).days
-        first_period_end_date = overall_earliest_purchase_date + \
-            timedelta(weeks=weeks_number)
-        days_since_first_period_end = (
-            datetime.now() - first_period_end_date).days
-        first_timeperiod_clients = [client for client in clients if days_since_first_period_end < client['recency']
-                                    <= days_since_first_period_start]
+    # If I base myself on the earliest command date I don't have to exclude them earlier
+    first_timeperiod_clients = [client for client in all_clients
+                                if days_since_first_period_end < client['days_since_first_purchase']
+                                <= days_since_first_period_start]
+
+    if len(first_timeperiod_clients) <= BEST_KMEANS_CLUSTERS_NUMBER:
+        print("Not enough clients in the first time period, skipping this iteration.\n")
+        return
+
+    model_a = get_kmeans_model_fit_on_clients(first_timeperiod_clients)
+    model_b = get_kmeans_model_fit_on_clients(all_clients)
+
+    for weeks_number in range(1, overall_week_numbers - weeks_number_for_first_period):
+        print(f"Simulation started for week number {weeks_number}.")
 
         days_since_second_period_start = days_since_first_period_end
-        days_since_second_period_end = (
-            datetime.now() - overall_latest_purchase_date).days
-        second_timeperiod_clients = [client for client in all_clients if days_since_second_period_end < client['recency']
+        days_since_second_period_end = days_since_first_period_end - weeks_number * 7
+        second_timeperiod_clients = [client for client in all_clients if
+                                     days_since_second_period_end < client['days_since_first_purchase']
                                      <= days_since_second_period_start]
 
-        all_periods_clients = first_timeperiod_clients + second_timeperiod_clients
-
-        if (len(first_timeperiod_clients) < BEST_KMEANS_CLUSTERS_NUMBER or
-                len(second_timeperiod_clients) < BEST_KMEANS_CLUSTERS_NUMBER):
-            print(
-                "Not enough clients in one of the time periods, skipping this iteration.\n")
+        if len(second_timeperiod_clients) <= BEST_KMEANS_CLUSTERS_NUMBER:
+            print("Not enough clients in one of the time periods, skipping this iteration.\n")
             continue
         else:
-            print(
-                f"Number of clients in the first time period: {
-                    len(first_timeperiod_clients)}, " f"number of clients in the second time period: {
-                    len(second_timeperiod_clients)}.")
+            prepared_second_period_clients = prepare_data(DataFrame(second_timeperiod_clients))
 
-        model_a = get_kmeans_model_fit_on_clients(first_timeperiod_clients)
-        model_b = get_kmeans_model_fit_on_clients(all_periods_clients)
+            try:
+                model_a_labels = model_a.predict(prepared_second_period_clients)
+                model_b_labels = model_b.predict(prepared_second_period_clients)
 
-        scaled_second_period_clients = DataFrame(
-            StandardScaler().fit_transform(
-                DataFrame(second_timeperiod_clients)))
-        model_a_labels = model_a.predict(scaled_second_period_clients)
-        model_b_labels = model_b.predict(scaled_second_period_clients)
+                ari_score = round(
+                    adjusted_rand_score(
+                        model_a_labels,
+                        model_b_labels),
+                    4)
 
-        ari_score = round(
-            adjusted_rand_score(
-                model_a_labels,
-                model_b_labels),
-            4)
-        ari_results.append(
-            {'weeks_number': overall_week_numbers - weeks_number,
-             'ari_score': ari_score})
-        print(f"ARI score:{ari_score} for weeks number:{weeks_number}.\n")
+                ari_results.append({'weeks_number': weeks_number, 'ari_score': ari_score})
+                print(f"ARI score:{ari_score} for weeks number:{weeks_number}.\n")
+            except Exception as e:
+                print(f"An error occurred during the week number:{weeks_number}, {e}.\n")
 
-    create_ari_scores_plot(ari_results, overall_week_numbers, is_first=False)
+    create_ari_scores_plot(ari_results, overall_week_numbers, weeks_number_for_first_period)
+
+
+def get_best_weeks_number_for_first_period(clients, overall_earliest_purchase_date, overall_week_numbers):
+    days_since_first_period_start = (datetime.now() - overall_earliest_purchase_date).days
+
+    sse = []
+    silhouette_coefficients = []
+    elements_counter = 0
+    weeks_number_with_highest_silhouette_score = 0
+
+    for weeks_number in range(1, overall_week_numbers + 1):
+        considered_clients = [client for client in clients
+                              if days_since_first_period_start - weeks_number * 7 < client['days_since_first_purchase']
+                              <= days_since_first_period_start]
+
+        if len(considered_clients) <= BEST_KMEANS_CLUSTERS_NUMBER:
+            continue
+        else:
+            elements_counter += 1
+
+        prepared_clients = prepare_data(DataFrame(considered_clients))
+
+        kmeans = KMeans(n_clusters=BEST_KMEANS_CLUSTERS_NUMBER, **kmeans_kwargs)
+        kmeans.fit(prepared_clients)
+
+        sse.append(kmeans.inertia_)
+        score = silhouette_score(prepared_clients, kmeans.labels_)
+        silhouette_coefficients.append(score)
+        if score > weeks_number_with_highest_silhouette_score:
+            weeks_number_with_highest_silhouette_score = score
+
+    create_ssd_plot(sse, elements_counter)
+    create_silhouette_score_plot(silhouette_coefficients, elements_counter)
+
+    return weeks_number_with_highest_silhouette_score
 
 
 if __name__ == '__main__':
     print("Starting simulation script.\n")
     remove_last_run_plots()
 
-    clients, overall_earliest_purchase_date, overall_latest_purchase_date = load_data()
+    all_clients, overall_earliest_purchase_date, overall_latest_purchase_date = load_data()
     # clients, overall_earliest_purchase_date, overall_latest_purchase_date = load_data(nb_elements=1000)
     print("Data loaded.\n")
 
-    overall_week_numbers = (
-        overall_latest_purchase_date - overall_earliest_purchase_date).days // 7
+    overall_week_numbers = (overall_latest_purchase_date - overall_earliest_purchase_date).days // 7
     print(f"Earliest purchase date:{overall_earliest_purchase_date}, "
-          f"latest purchase date:{overall_latest_purchase_date}, overall week numbers:{overall_week_numbers}.\n")
+          f"latest purchase date:{overall_latest_purchase_date}.\n")
 
-    create_ari_scores_plot_using_first_method(
-        clients, overall_earliest_purchase_date, overall_week_numbers)
+    # weeks_number_for_first_period = get_best_weeks_number_for_first_period(
+    #     clients, overall_earliest_purchase_date, overall_week_numbers)
+    weeks_number_for_first_period = 20
 
-    create_ari_scores_plot_using_second_method(
-        clients,
-        overall_earliest_purchase_date,
-        overall_latest_purchase_date,
-        overall_week_numbers)
-    print("All processing is now done.")
+    for i in range(3, overall_week_numbers):
+        print("Starting simulation.\n")
+        # perform_simulation(overall_earliest_purchase_date, weeks_number_for_first_period, all_clients)
+        perform_simulation(overall_earliest_purchase_date, i, all_clients)
+
+
+    print("\nThe simulation is now done.")
