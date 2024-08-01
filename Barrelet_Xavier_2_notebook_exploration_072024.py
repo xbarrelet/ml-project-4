@@ -62,7 +62,8 @@ def load_data():
     inner join order_items oi on o.order_id = oi.order_id""")
     orders = res.fetchall()
 
-    res = cur.execute("select order_id, payment_type from order_pymts where payment_type != 'not_defined'")
+    res = cur.execute(
+        "select order_id, payment_type from order_pymts where payment_type != 'not_defined'")
     payments = res.fetchall()
 
     cur.close()
@@ -70,11 +71,17 @@ def load_data():
 
     sorted_reviews = {}
     for review in reviews:
-        sorted_reviews.setdefault(review['order_id'], []).append(review['review_score'])
+        sorted_reviews.setdefault(
+            review['order_id'],
+            []).append(
+            review['review_score'])
 
     sorted_payments = {}
     for payment in payments:
-        sorted_payments.setdefault(payment['order_id'], set()).add(payment['payment_type'])
+        sorted_payments.setdefault(
+            payment['order_id'],
+            set()).add(
+            payment['payment_type'])
 
     sorted_orders = {}
     for order in [dict(order) for order in orders]:

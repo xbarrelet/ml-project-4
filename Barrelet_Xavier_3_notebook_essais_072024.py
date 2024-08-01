@@ -11,8 +11,7 @@ from matplotlib import pyplot as plt
 from numpy import unique
 from pandas.core.frame import DataFrame
 from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
-from sklearn.cluster import KMeans, DBSCAN, OPTICS, AgglomerativeClustering
-from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans, DBSCAN, OPTICS
 from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score, adjusted_rand_score
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -69,7 +68,8 @@ def load_data(nb_elements=99999999):
     inner join order_items oi on o.order_id = oi.order_id""")
     orders = res.fetchall()
 
-    res = cur.execute("select order_id, payment_type from order_pymts where payment_type != 'not_defined'")
+    res = cur.execute(
+        "select order_id, payment_type from order_pymts where payment_type != 'not_defined'")
     payments = res.fetchall()
 
     cur.close()
@@ -84,7 +84,10 @@ def load_data(nb_elements=99999999):
 
     sorted_payments = {}
     for payment in payments:
-        sorted_payments.setdefault(payment['order_id'], set()).add(payment['payment_type'])
+        sorted_payments.setdefault(
+            payment['order_id'],
+            set()).add(
+            payment['payment_type'])
 
     sorted_orders = {}
     for order in [dict(order) for order in orders]:
@@ -168,8 +171,8 @@ def fit_kmeans(scaled_features, kmeans_kwargs):
     for k in range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1):
         print(
             f"KMeans clustering with {k} cluster{
-            's' if k > 1 else ''} started at {
-            datetime.now().strftime("%H:%M:%S")}")
+                's' if k > 1 else ''} started at {
+                datetime.now().strftime("%H:%M:%S")}")
         kmeans = KMeans(n_clusters=k, **kmeans_kwargs)
         kmeans.fit(scaled_features)
 
@@ -260,7 +263,8 @@ def perform_hierarchical_modeling(scaled_df):
     print("Dendrogram generated.\n")
 
     for clusters_number in range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1):
-        print(f"Generating hierarchical clusters visualization with {clusters_number} clusters.")
+        print(
+            f"Generating hierarchical clusters visualization with {clusters_number} clusters.")
 
         labels = fcluster(Z, clusters_number, criterion='maxclust')
         visualize_clusters(scaled_df, labels, f"hierarchical")
@@ -285,16 +289,28 @@ def perform_dbscan_clustering(scaled_df):
     """Performs DBSCAN modeling."""
     print("\nStarting DBSCAN modeling.\n")
 
-    for min_sample in range(50, 201, 25):
-        for eps in np.arange(0.01, 2, 0.01):
+    for min_sample in range(100, 401, 50):
+        # > 20 = 1 cluster
+        for eps in np.arange(1, 21, 1):
             dbscan = DBSCAN(eps=eps, min_samples=min_sample)
             dbscan.fit(scaled_df)
             labels = dbscan.labels_
 
             clusters_number = len(unique(labels))
-            print(f"DBSCAN with min_sample:{min_sample}, eps:{round(eps, 2)} generated {clusters_number} clusters.")
-            if MIN_CLUSTERS_NUMBER <= clusters_number <= MAX_CLUSTERS_NUMBER:
-                visualize_clusters(scaled_df, labels, f"dbscan_min_samples_{min_sample}_eps_{round(eps, 2)}")
+            print(
+                f"DBSCAN with min_sample:{min_sample}, eps:{
+                    round(
+                        eps,
+                        2)} generated {clusters_number} clusters.")
+
+            if MIN_CLUSTERS_NUMBER < clusters_number <= MAX_CLUSTERS_NUMBER:
+                visualize_clusters(
+                    scaled_df,
+                    labels,
+                    f"dbscan_min_samples_{min_sample}_eps_{
+                        round(
+                            eps,
+                            2)}")
 
 
 def perform_optics_clustering(scaled_df):
@@ -309,9 +325,10 @@ def perform_optics_clustering(scaled_df):
         labels = optics.labels_
 
         clusters_number = len(unique(labels))
-        print(f"OPTICS with min_samples:{min_samples} generated {clusters_number} clusters.")
+        print(
+            f"OPTICS with min_samples:{min_samples} generated {clusters_number} clusters.")
 
-        if MIN_CLUSTERS_NUMBER <= clusters_number <= MAX_CLUSTERS_NUMBER:
+        if MIN_CLUSTERS_NUMBER < clusters_number <= MAX_CLUSTERS_NUMBER:
             visualize_clusters(
                 scaled_df,
                 labels,
@@ -319,52 +336,14 @@ def perform_optics_clustering(scaled_df):
 
 
 def visualize_clusters(scaled_df, labels, strategy_name):
-    """Generate a PCA graph showing the generated clusters and display the plot."""
+    """Generate a 2d TSNE graph showing the generated clusters and display the plot."""
     labels = pd.Categorical(labels)
-
-    # pca = PCA()
-    # pca_results = pca.fit_transform(scaled_df)
-    # pca_df = DataFrame(pca_results[:, :2], columns=['x', 'y'])
-    # pca_df['labels'] = pd.Categorical(labels)
-
-    # pca = PCA(n_components=3)
-    # pca.fit(scaled_df)
-    # X_pca = pca.transform(scaled_df)
-    #
-    # ex_variance = np.var(X_pca, axis=0)
-    # ex_variance / np.sum(ex_variance)
-    #
-    # Xax = X_pca[:, 0]
-    # Yax = X_pca[:, 1]
-    # Zax = X_pca[:, 2]
-    #
-    # cdict = {0: 'red', 1: 'green'}
-    # labl = {0: 'Malignant', 1: 'Benign'}
-    # marker = {0: '*', 1: 'o'}
-    # alpha = {0: .3, 1: .5}
-    #
-    # fig = plt.figure(figsize=(7, 5))
-    # ax = fig.add_subplot(111, projection='3d')
-    #
-    # fig.patch.set_facecolor('white')
-    # for l in np.unique(labels):
-    #     ix = np.where(labels == l)
-    #     ax.scatter(Xax[ix], Yax[ix], Zax[ix], c=cdict[l], s=40,
-    #                label=labl[l], marker=marker[l], alpha=alpha[l])
-    # # for loop ends
-    # ax.set_xlabel("First Principal Component", fontsize=14)
-    # ax.set_ylabel("Second Principal Component", fontsize=14)
-    # ax.set_zlabel("Third Principal Component", fontsize=14)
-    #
-    # ax.legend()
-    # fig.savefig(f"plots/{strategy_name.split("_")[0]}/{strategy_name.replace("_", " ")}_{len(labels.unique())}_3d_clusters.png")
-    # plt.close()
+    scaled_df['labels'] = labels
 
     tsne = TSNE(n_components=2)
     tsne_results = tsne.fit_transform(scaled_df)
     scaled_df['tsne-x'] = tsne_results[:, 0]
     scaled_df['tsne-y'] = tsne_results[:, 1]
-    scaled_df['labels'] = pd.Categorical(labels)
 
     plt.figure(figsize=(12, 10))
     plot = sns.scatterplot(
@@ -374,12 +353,16 @@ def visualize_clusters(scaled_df, labels, strategy_name):
         hue="labels",
         palette="bright")
 
-    plot.set_title(f'Scatter plot of clusters from strategy {strategy_name.upper()}')
+    plot.set_title(
+        f'Scatter plot of clusters from strategy {
+            strategy_name.upper()}')
     plot.set_xlabel(f'F1')
     plot.set_ylabel(f'F2')
     plot.grid(True)
 
-    display_plot(plot, f"{strategy_name.replace("_", " ")}_{len(labels.unique())}_clusters",
+    display_plot(plot,
+                 f"{strategy_name.replace("_",
+                                          " ")}_{len(labels.unique())}_clusters",
                  f"{strategy_name.split("_")[0]}")
 
 
@@ -435,14 +418,21 @@ def verify_form_and_stability_of_best_strategy(scaled_df, original_labels):
 
 
 def prepare_data(df):
-    one_hot_encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+    one_hot_encoder = OneHotEncoder(
+        handle_unknown="ignore",
+        sparse_output=False)
 
-    payment_type_df = one_hot_encoder.fit_transform(DataFrame(df["payment_type"]))
-    payment_type_df = DataFrame(payment_type_df, columns=one_hot_encoder.get_feature_names_out())
+    payment_type_df = one_hot_encoder.fit_transform(
+        DataFrame(df["payment_type"]))
+    payment_type_df = DataFrame(
+        payment_type_df,
+        columns=one_hot_encoder.get_feature_names_out())
     payment_type_df.index = df.index
 
     df.drop("payment_type", axis=1, inplace=True)
-    scaled_df = DataFrame(StandardScaler().fit_transform(df), columns=df.columns)
+    scaled_df = DataFrame(
+        StandardScaler().fit_transform(df),
+        columns=df.columns)
     encoded_df = pd.concat([scaled_df, payment_type_df], axis=1)
 
     return encoded_df
@@ -459,7 +449,8 @@ if __name__ == '__main__':
 
     prepared_df: DataFrame = prepare_data(df)
     # smaller_prepared_df: DataFrame = prepared_df.sample(n=10000, random_state=42)
-    smaller_prepared_df: DataFrame = prepared_df.sample(n=50000, random_state=42)
+    smaller_prepared_df: DataFrame = prepared_df.sample(
+        n=40000, random_state=42)
 
     # kmeans_labels = perform_kmeans_modeling(prepared_df)
 
