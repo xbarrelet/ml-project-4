@@ -25,7 +25,7 @@ pd.set_option('display.max_columns', None)
 
 MIN_CLUSTERS_NUMBER = 2
 MAX_CLUSTERS_NUMBER = 10
-BEST_KMEANS_CLUSTERS_NUMBER = 4
+BEST_KMEANS_CLUSTERS_NUMBER = 3
 
 
 def remove_last_run_plots():
