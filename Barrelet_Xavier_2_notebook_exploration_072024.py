@@ -232,8 +232,10 @@ def create_pieplot_for_RFM_segments(df, prefix):
     plt.close()
 
 
-def create_pieplot_for_payment_types(df, prefix):
+def create_pieplot_for_payment_types(df: DataFrame, prefix):
     """Generate and display the pie plot for the RFM segments."""
+    df.sort_values("payment_type", ascending=False, inplace=True)
+
     unique_values = df["payment_type"].unique()
     data = []
     labels = []
@@ -243,7 +245,7 @@ def create_pieplot_for_payment_types(df, prefix):
         data.append(values_count)
         labels.append(value)
 
-    plt.figure(figsize=(10, 8))
+    plt.figure(figsize=(15, 12))
     colors = sns.color_palette('pastel')[0:6]
     plt.pie(data, labels=labels, colors=colors, autopct='%.0f%%')
     plt.title('Payment types')
@@ -261,7 +263,7 @@ def visualize_data(df, prefix):
     create_visualization_plot_for_attribute(df, "RFM_Score", prefix)
 
     if "payment_type" in df.columns:
-        create_pieplot_for_payment_types(df, prefix)
+        create_pieplot_for_payment_types(df.copy(), prefix)
 
     if "RFM_Level" in df.columns:
         create_pieplot_for_RFM_segments(df, prefix)
@@ -329,18 +331,18 @@ if __name__ == '__main__':
     df: DataFrame = load_data()
     print(f"Data loaded with {len(df)} customers.\n")
 
-    df = add_rfm_columns(df)
-    visualize_rfm_segments(df)
+    # df = add_rfm_columns(df)
+    # visualize_rfm_segments(df)
     print("RFM segmentation finished.\n")
 
     visualize_data(df, "pre_scaling")
 
-    df.drop(columns=["RFM_Level"], axis=1, inplace=True)
-    df.drop(columns=["payment_type"], axis=1, inplace=True)
+    # df.drop(columns=["RFM_Level"], axis=1, inplace=True)
+    # df.drop(columns=["payment_type"], axis=1, inplace=True)
 
-    scaled_df = DataFrame(
-        StandardScaler().fit_transform(df),
-        columns=df.columns)
-    visualize_data(scaled_df, "after_scaling")
+    # scaled_df = DataFrame(
+    #     StandardScaler().fit_transform(df),
+    #     columns=df.columns)
+    # visualize_data(scaled_df, "after_scaling")
 
     print("Visualization done.")

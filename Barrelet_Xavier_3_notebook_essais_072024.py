@@ -165,7 +165,7 @@ def load_data(nb_elements=99999999):
 
 def fit_kmeans(scaled_features, kmeans_kwargs):
     """Performs multiple Kmeans modelings and returns the SSE and silhouette scores."""
-    sse = []
+    ssd = []
     silhouette_coefficients = []
 
     for k in range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1):
@@ -178,16 +178,16 @@ def fit_kmeans(scaled_features, kmeans_kwargs):
 
         visualize_clusters(scaled_features, kmeans.labels_, f"kmeans")
 
-        sse.append(kmeans.inertia_)
+        ssd.append(kmeans.inertia_)
 
         score = silhouette_score(scaled_features, kmeans.labels_)
         silhouette_coefficients.append(score)
 
-    return sse, silhouette_coefficients
+    return ssd, silhouette_coefficients
 
 
 def create_ssd_plot(sse):
-    """Display the SSE plot."""
+    """Display the SSD plot."""
     plt.figure(figsize=(10, 9))
     plot = sns.lineplot(
         DataFrame(sse),
@@ -232,11 +232,11 @@ def perform_kmeans_modeling(scaled_df):
         "max_iter": 500
     }
 
-    sse, silhouette_coefficients = fit_kmeans(scaled_df, kmeans_kwargs)
-    create_ssd_plot(sse)
+    ssd, silhouette_coefficients = fit_kmeans(scaled_df, kmeans_kwargs)
+    create_ssd_plot(ssd)
     create_silhouette_score_plot(silhouette_coefficients)
 
-    # kl = KneeLocator(range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1), sse, curve="convex", direction="decreasing")
+    # kl = KneeLocator(range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1), ssd, curve="convex", direction="decreasing")
     # print(f"\nElbow found at iteration:{kl.elbow}.\n")
 
     kmeans = KMeans(n_clusters=BEST_KMEANS_CLUSTERS_NUMBER, **kmeans_kwargs)
@@ -452,12 +452,12 @@ if __name__ == '__main__':
     smaller_prepared_df: DataFrame = prepared_df.sample(
         n=40000, random_state=42)
 
-    # kmeans_labels = perform_kmeans_modeling(prepared_df)
+    kmeans_labels = perform_kmeans_modeling(prepared_df)
 
     perform_density_based_modeling(smaller_prepared_df)
 
     perform_hierarchical_modeling(smaller_prepared_df)
 
-    # verify_form_and_stability_of_best_strategy(prepared_df, kmeans_labels)
+    verify_form_and_stability_of_best_strategy(prepared_df, kmeans_labels)
 
     print("All processing is now done.")
