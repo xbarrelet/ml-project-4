@@ -24,7 +24,14 @@ pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
 MIN_CLUSTERS_NUMBER = 2
-MAX_CLUSTERS_NUMBER = 10
+# MAX_CLUSTERS_NUMBER = 10
+MAX_CLUSTERS_NUMBER = 6
+
+KMEANS_DEFAULT_ARGS = {
+    "init": "k-means++",
+    "n_init": 50,
+    "max_iter": 500
+}
 BEST_KMEANS_CLUSTERS_NUMBER = 3
 
 
@@ -163,25 +170,24 @@ def load_data(nb_elements=99999999):
     return DataFrame(clients[:nb_elements])
 
 
-def fit_kmeans(scaled_features, kmeans_kwargs):
+def fit_kmeans(prepared_df):
     """Performs multiple Kmeans modelings and returns the SSE and silhouette scores."""
     ssd = []
     silhouette_coefficients = []
 
-    for k in range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1):
-        print(
-            f"KMeans clustering with {k} cluster{
-                's' if k > 1 else ''} started at {
-                datetime.now().strftime("%H:%M:%S")}")
-        kmeans = KMeans(n_clusters=k, **kmeans_kwargs)
-        kmeans.fit(scaled_features)
+    for clusters_number in range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1):
+        print(f"KMeans clustering with {clusters_number} cluster{'s' if clusters_number > 1 else ''}, "
+              f"started at {datetime.now().strftime("%H:%M:%S")}")
 
-        visualize_clusters(scaled_features, kmeans.labels_, f"kmeans")
+        kmeans = KMeans(n_clusters=clusters_number, **KMEANS_DEFAULT_ARGS)
+        kmeans.fit(prepared_df)
 
         ssd.append(kmeans.inertia_)
 
-        score = silhouette_score(scaled_features, kmeans.labels_)
+        score = silhouette_score(prepared_df, kmeans.labels_)
         silhouette_coefficients.append(score)
+
+        # visualize_clusters(scaled_features, best_model.labels_, f"kmeans")
 
     return ssd, silhouette_coefficients
 
@@ -220,27 +226,21 @@ def create_silhouette_score_plot(silhouette_coefficients):
     display_plot(plot, "silhouette_coefficient", "kmeans")
 
 
-def perform_kmeans_modeling(scaled_df):
+def perform_kmeans_modeling(prepared_df):
     """Performs multiple Kmeans modelings, produces SSE and silhouette score plots
     and returns the best number of clusters based on the elbow method and its labels.
     """
     print("Starting KMEANS modeling.\n")
 
-    kmeans_kwargs = {
-        "init": "k-means++",
-        "n_init": 50,
-        "max_iter": 500
-    }
-
-    ssd, silhouette_coefficients = fit_kmeans(scaled_df, kmeans_kwargs)
+    ssd, silhouette_coefficients = fit_kmeans(prepared_df)
     create_ssd_plot(ssd)
     create_silhouette_score_plot(silhouette_coefficients)
 
     # kl = KneeLocator(range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1), ssd, curve="convex", direction="decreasing")
     # print(f"\nElbow found at iteration:{kl.elbow}.\n")
 
-    kmeans = KMeans(n_clusters=BEST_KMEANS_CLUSTERS_NUMBER, **kmeans_kwargs)
-    kmeans.fit(scaled_df)
+    kmeans = KMeans(n_clusters=BEST_KMEANS_CLUSTERS_NUMBER, **KMEANS_DEFAULT_ARGS)
+    kmeans.fit(prepared_df)
     return kmeans.labels_
 
 
@@ -262,12 +262,18 @@ def perform_hierarchical_modeling(scaled_df):
     generate_dendrogram(Z)
     print("Dendrogram generated.\n")
 
+    silhouette_coefficients = []
     for clusters_number in range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1):
         print(
             f"Generating hierarchical clusters visualization with {clusters_number} clusters.")
 
         labels = fcluster(Z, clusters_number, criterion='maxclust')
         visualize_clusters(scaled_df, labels, f"hierarchical")
+
+        score = silhouette_score(scaled_df, labels)
+        silhouette_coefficients.append(score)
+
+    create_silhouette_score_plot(silhouette_coefficients)
 
 
 def generate_dendrogram(Z):
@@ -299,18 +305,18 @@ def perform_dbscan_clustering(scaled_df):
             clusters_number = len(unique(labels))
             print(
                 f"DBSCAN with min_sample:{min_sample}, eps:{
-                    round(
-                        eps,
-                        2)} generated {clusters_number} clusters.")
+                round(
+                    eps,
+                    2)} generated {clusters_number} clusters.")
 
             if MIN_CLUSTERS_NUMBER < clusters_number <= MAX_CLUSTERS_NUMBER:
                 visualize_clusters(
                     scaled_df,
                     labels,
                     f"dbscan_min_samples_{min_sample}_eps_{
-                        round(
-                            eps,
-                            2)}")
+                    round(
+                        eps,
+                        2)}")
 
 
 def perform_optics_clustering(scaled_df):
@@ -355,7 +361,7 @@ def visualize_clusters(scaled_df, labels, strategy_name):
 
     plot.set_title(
         f'Scatter plot of clusters from strategy {
-            strategy_name.upper()}')
+        strategy_name.upper()}')
     plot.set_xlabel(f'F1')
     plot.set_ylabel(f'F2')
     plot.grid(True)
@@ -395,15 +401,15 @@ def generate_ari_scores_plot(ari_scores):
     plt.close()
 
 
-def verify_form_and_stability_of_best_strategy(scaled_df, original_labels):
+def verify_form_and_stability_of_best_strategy(prepared_df, original_labels):
     """Performs multiple kmeans modeling with the best clusters number to verify its form and result."""
     print("Starting verification of form and stability of the best strategy.\n")
 
-    iterations_number = 20
+    iterations_number = 100
     ari_scores = []
     for iteration in range(1, iterations_number + 1):
-        kmeans = KMeans(n_clusters=BEST_KMEANS_CLUSTERS_NUMBER)
-        kmeans.fit(scaled_df)
+        kmeans = KMeans(n_clusters=BEST_KMEANS_CLUSTERS_NUMBER, **KMEANS_DEFAULT_ARGS)
+        kmeans.fit(prepared_df)
         labels = kmeans.labels_
 
         # visualize_clusters(
@@ -449,14 +455,13 @@ if __name__ == '__main__':
 
     prepared_df: DataFrame = prepare_data(df)
     # smaller_prepared_df: DataFrame = prepared_df.sample(n=10000, random_state=42)
-    smaller_prepared_df: DataFrame = prepared_df.sample(
-        n=40000, random_state=42)
+    smaller_prepared_df: DataFrame = prepared_df.sample(n=40000, random_state=42)
 
     kmeans_labels = perform_kmeans_modeling(prepared_df)
 
-    perform_density_based_modeling(smaller_prepared_df)
+    # perform_density_based_modeling(smaller_prepared_df)
 
-    perform_hierarchical_modeling(smaller_prepared_df)
+    # perform_hierarchical_modeling(smaller_prepared_df)
 
     verify_form_and_stability_of_best_strategy(prepared_df, kmeans_labels)
 

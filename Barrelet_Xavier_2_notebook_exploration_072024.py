@@ -29,6 +29,7 @@ def remove_last_run_plots():
 
 
 def display_plot(plot, filename: str, prefix: str) -> None:
+    """Display plot."""
     os.makedirs(f"analysis_plots/{prefix}", exist_ok=True)
 
     # fig = plot.get_figure()
@@ -318,7 +319,7 @@ def rfm_level(df):
 
 
 def visualize_rfm_segments(df):
-    os.makedirs("analysis_plots/RFM", exist_ok=True)
+    # os.makedirs("analysis_plots/RFM", exist_ok=True)
 
     RFM_stats = save_rfm_stats(df)
     save_rfm_segments(RFM_stats)
