@@ -332,18 +332,18 @@ if __name__ == '__main__':
     df: DataFrame = load_data()
     print(f"Data loaded with {len(df)} customers.\n")
 
-    # df = add_rfm_columns(df)
-    # visualize_rfm_segments(df)
+    df = add_rfm_columns(df)
+    visualize_rfm_segments(df)
     print("RFM segmentation finished.\n")
 
     visualize_data(df, "pre_scaling")
 
-    # df.drop(columns=["RFM_Level"], axis=1, inplace=True)
-    # df.drop(columns=["payment_type"], axis=1, inplace=True)
+    df.drop(columns=["RFM_Level"], axis=1, inplace=True)
+    df.drop(columns=["payment_type"], axis=1, inplace=True)
 
-    # scaled_df = DataFrame(
-    #     StandardScaler().fit_transform(df),
-    #     columns=df.columns)
-    # visualize_data(scaled_df, "after_scaling")
+    scaled_df = DataFrame(
+        StandardScaler().fit_transform(df),
+        columns=df.columns)
+    visualize_data(scaled_df, "after_scaling")
 
     print("Visualization done.")

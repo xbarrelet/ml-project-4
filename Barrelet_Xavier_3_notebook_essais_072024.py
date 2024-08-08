@@ -3,7 +3,9 @@ import os
 import shutil
 import sqlite3
 from datetime import datetime
+from pprint import pprint
 
+import dataframe_image as dfi
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -24,8 +26,8 @@ pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
 MIN_CLUSTERS_NUMBER = 2
-# MAX_CLUSTERS_NUMBER = 10
-MAX_CLUSTERS_NUMBER = 6
+MAX_CLUSTERS_NUMBER = 10
+# MAX_CLUSTERS_NUMBER = 6
 
 KMEANS_DEFAULT_ARGS = {
     "init": "k-means++",
@@ -170,7 +172,7 @@ def load_data(nb_elements=99999999):
     return DataFrame(clients[:nb_elements])
 
 
-def fit_kmeans(prepared_df):
+def fit_kmeans(prepared_df, df):
     """Performs multiple Kmeans modelings and returns the SSE and silhouette scores."""
     ssd = []
     silhouette_coefficients = []
@@ -187,7 +189,7 @@ def fit_kmeans(prepared_df):
         score = silhouette_score(prepared_df, kmeans.labels_)
         silhouette_coefficients.append(score)
 
-        # visualize_clusters(scaled_features, best_model.labels_, f"kmeans")
+        visualize_clusters(prepared_df, kmeans.labels_, f"kmeans")
 
     return ssd, silhouette_coefficients
 
@@ -232,9 +234,9 @@ def perform_kmeans_modeling(prepared_df):
     """
     print("Starting KMEANS modeling.\n")
 
-    ssd, silhouette_coefficients = fit_kmeans(prepared_df)
-    create_ssd_plot(ssd)
-    create_silhouette_score_plot(silhouette_coefficients)
+    # ssd, silhouette_coefficients = fit_kmeans(prepared_df)
+    # create_ssd_plot(ssd)
+    # create_silhouette_score_plot(silhouette_coefficients)
 
     # kl = KneeLocator(range(MIN_CLUSTERS_NUMBER, MAX_CLUSTERS_NUMBER + 1), ssd, curve="convex", direction="decreasing")
     # print(f"\nElbow found at iteration:{kl.elbow}.\n")
@@ -444,6 +446,36 @@ def prepare_data(df):
     return encoded_df
 
 
+def display_clusters_stats(df, kmeans_labels):
+    """Generate and display a table containing the different stats per clusters."""
+    os.makedirs("plots/final", exist_ok=True)
+
+    labels = pd.Categorical(kmeans_labels)
+    df['labels'] = labels
+
+    clusters_stats = df.groupby("labels", observed=True).agg({
+        'recency': 'mean',
+        'frequency': 'mean',
+        'monetary_value': ['mean', 'count']
+    }).round(1)
+    clusters_stats.columns = clusters_stats.columns.droplevel()
+    clusters_stats.columns = [
+        'Recency_Mean',
+        'Frequency_Mean',
+        'MonetaryValue_Mean',
+        'MonetaryValue_Count'
+    ]
+    clusters_stats.sort_values("MonetaryValue_Count", ascending=False, inplace=True)
+
+    dfi.export(
+        clusters_stats,
+        'plots/final/clusters_stats.png',
+        table_conversion='matplotlib',
+        fontsize=9)
+
+    pprint(clusters_stats)
+
+
 if __name__ == '__main__':
     print("Starting modeling script.\n")
 
@@ -459,9 +491,9 @@ if __name__ == '__main__':
 
     kmeans_labels = perform_kmeans_modeling(prepared_df)
 
-    # perform_density_based_modeling(smaller_prepared_df)
+    perform_density_based_modeling(smaller_prepared_df)
 
-    # perform_hierarchical_modeling(smaller_prepared_df)
+    perform_hierarchical_modeling(smaller_prepared_df)
 
     verify_form_and_stability_of_best_strategy(prepared_df, kmeans_labels)
 
